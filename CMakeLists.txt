@@ -22,13 +22,14 @@ add_link_options(-acc)
 find_package(CUDAToolkit REQUIRED)
 
 # 5. 定义源文件列表
-set(SOURCES 
+set(SOURCES
     src/main.cpp
     src/Stokes.cpp
     src/IO.cpp
     src/Force.cpp
     src/Viscosity.cpp
     src/Velocity.cpp
+    src/Analysis.cpp
 
 )
 
