@@ -25,8 +25,8 @@ void step_navier_stokes
     // randD: 0,1,2 对应 xx, yy, zz 方向；randN: 0,1,2 对应 xy, yz, zx 方向
     #pragma acc host_data use_device(randD, randN)
     {
-        curandGenerateNormalDouble(gen, randD, size * 3, 0.0, 1.0);
-        curandGenerateNormalDouble(gen, randN, size * 3, 0.0, 1.0);
+        CURAND_CHECK(curandGenerateNormalDouble(gen, randD, size * 3, 0.0, 1.0));
+        CURAND_CHECK(curandGenerateNormalDouble(gen, randN, size * 3, 0.0, 1.0));
     }
     
     // --- 2. 计算总动量通量 Π = Advection - Viscosity - Noise ---
@@ -170,23 +170,13 @@ void step_navier_stokes
     // --- 4. FFT 求解泊松方程 (Pressure Solver) ---
     #pragma acc host_data use_device(fft_data)
     {
-        cufftExecZ2Z(plan, (cufftDoubleComplex*)fft_data, (cufftDoubleComplex*)fft_data, CUFFT_FORWARD);
+        CUFFT_CHECK(cufftExecZ2Z(plan, (cufftDoubleComplex*)fft_data,
+                                 (cufftDoubleComplex*)fft_data, CUFFT_FORWARD));
     }
 
-    // #pragma acc parallel loop present(fft_data)
-    // for (int ijk = 0; ijk < size; ijk++)
-    // {
-    //     int i = ijk / (Ny * Nz);
-    //     int j = (ijk % (Ny * Nz)) / Nz;
-    //     int k = ijk % Nz;
-    //     if (i == 0 && j == 0 && k == 0) { fft_data[ijk*2] = 0; fft_data[ijk*2+1] = 0; continue; }
-
-    //     double nrm = 0.5 / (cos(2.*M_PI*i/Nx) + cos(2.*M_PI*j/Ny) + cos(2.*M_PI*k/Nz) - 3.0);
-    //     fft_data[ijk * 2] *= nrm;
-    //     fft_data[ijk * 2 + 1] *= nrm;
-    // }
-
-    #pragma acc parallel collapse(3) loop present(fft_data)
+    // 除以 7 点差分格式的【精确离散】拉普拉斯本征值 2(cos kx + cos ky + cos kz - 3)，
+    // 而非连续谱的 -k²。这样与第 3 步的有限差分离散严格自洽。
+    #pragma acc parallel loop collapse(3) present(fft_data)
     for (int i = 0; i < Nx; i++)
     {
         for (int j = 0; j < Ny; j++)
@@ -206,7 +196,8 @@ void step_navier_stokes
 
     #pragma acc host_data use_device(fft_data)
     {
-        cufftExecZ2Z(plan, (cufftDoubleComplex*)fft_data, (cufftDoubleComplex*)fft_data, CUFFT_INVERSE);
+        CUFFT_CHECK(cufftExecZ2Z(plan, (cufftDoubleComplex*)fft_data,
+                                 (cufftDoubleComplex*)fft_data, CUFFT_INVERSE));
     }
 
     // --- 5. 最终速度更新 (Correction step) ---

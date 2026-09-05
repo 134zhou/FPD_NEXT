@@ -1,79 +1,73 @@
 #include "./include/Velocity.h"
 
-void update_particale_VandR
-(
-    NS_Config cfg,
-    double* phi_grid, double* sum_phi,
-    int N, double* Rx, double* Ry, double* Rz,
-    double* Vx, double* Vy, double* Vz,
-    double* vx, double* vy, double* vz
+void update_particle_velocity(
+    NS_Config cfg, PhiParams pp,
+    int N, const double* Rx, const double* Ry, const double* Rz,
+    const double* sum_phix, const double* sum_phiy, const double* sum_phiz,
+    const double* vx, const double* vy, const double* vz,
+    double* Vx, double* Vy, double* Vz
 )
 {
-    int Nx = cfg.Nx, Ny = cfg.Ny, Nz = cfg.Nz;
-    double DT = cfg.dt;
+    const int n3 = stencil_size(pp);
 
-
-    #pragma acc parallel loop collapse(4) present(phi_grid, Rx, Ry, Rz, Vx, Vy, Vz, vx, vy, vz)
-    for(int n=0;n< N;n++)
-    {
-        for (int li = 0; li < N_range; li++)
-        {
-            for (int lj = 0; lj < N_range; lj++)
-            {
-                for (int lk = 0; lk < N_range; lk++)
-                {
-                    double Rnx = Rx[n]; double Rny = Ry[n]; double Rnz = Rz[n];
-                    int in = (int)Rnx; int jn = (int)Rny; int kn = (int)Rnz;
-
-                    // li, lj, lk 是局部范围索引，映射到全局格点
-                    // 映射到全局周期性网格
-                    int ir = li + in - range_m1;
-                    int jr = lj + jn - range_m1;
-                    int kr = lk + kn - range_m1;
-
-                    int irP = (ir + Nx) % Nx;
-                    int jrP = (jr + Ny) % Ny;
-                    int krP = (kr + Nz) % Nz;
-                    int ijkP = IDX(irP, jrP, krP);
-
-                    double temp_phi = phi_grid[ijkP];
-
-                    #pragma acc atomic update
-                    Vx[n] += vx[ijkP] * temp_phi;
-
-                    #pragma acc atomic update
-                    Vy[n] += vy[ijkP] * temp_phi;
-
-                    #pragma acc atomic update
-                    Vz[n] += vz[ijkP] * temp_phi;
-                }
-            }
-        }
-    }
-
-
-    #pragma acc parallel loop collapse(1) present(Vx, Vy, Vz, sum_phi)
+    // gang over 粒子 + 内层 vector reduction。
+    // 局部累加变量天然清零，顺带修掉 C4（旧代码 Vx[n] += 前未清零）。
+    #pragma acc parallel loop gang \
+        present(Rx, Ry, Rz, sum_phix, sum_phiy, sum_phiz, vx, vy, vz, Vx, Vy, Vz)
     for (int n = 0; n < N; n++)
     {
-        Vx[n] = Vx[n] / sum_phi[n];
-        Vy[n] = Vy[n] / sum_phi[n];
-        Vz[n] = Vz[n] / sum_phi[n];
+        double sx = 0.0, sy = 0.0, sz = 0.0;
+
+        #pragma acc loop vector reduction(+:sx, sy, sz)
+        for (int l = 0; l < n3; l++)
+        {
+            int ijk; double w;
+
+            // 权重与力投影、归一化因子同源：同一个 stencil_point<FACE_*>
+            if (stencil_point<FACE_X>(pp, cfg, Rx[n], Ry[n], Rz[n], l, ijk, w)) { sx += vx[ijk] * w; }
+            if (stencil_point<FACE_Y>(pp, cfg, Rx[n], Ry[n], Rz[n], l, ijk, w)) { sy += vy[ijk] * w; }
+            if (stencil_point<FACE_Z>(pp, cfg, Rx[n], Ry[n], Rz[n], l, ijk, w)) { sz += vz[ijk] * w; }
+        }
+
+        Vx[n] = sx / sum_phix[n];
+        Vy[n] = sy / sum_phiy[n];
+        Vz[n] = sz / sum_phiz[n];
     }
+}
 
+void update_particle_position(
+    NS_Config cfg,
+    int N,
+    double* Rx, double* Ry, double* Rz,
+    double* Rux, double* Ruy, double* Ruz,
+    const double* Vx, const double* Vy, const double* Vz
+)
+{
+    const double DT = cfg.dt;
+    const double Lx = (double)cfg.Nx, Ly = (double)cfg.Ny, Lz = (double)cfg.Nz;
 
-    // time evolution of particles' positions --			
-    #pragma acc parallel loop collapse(1)
-    for(int n=0;n<N;n++)
+    #pragma acc parallel loop present(Rx, Ry, Rz, Rux, Ruy, Ruz, Vx, Vy, Vz)
+    for (int n = 0; n < N; n++)
     {
-        Rx[n] += DT*Vx[n]; 			
-        Ry[n] += DT*Vy[n];
-        Rz[n] += DT*Vz[n];
-        
+        const double dx = DT * Vx[n];
+        const double dy = DT * Vy[n];
+        const double dz = DT * Vz[n];
 
-        //PBC	
-        Rx[n] = fmod(Rx[n], (double)Nx);		
-        Ry[n] = fmod(Ry[n], (double)Ny);
-        Rz[n] = fmod(Rz[n], (double)Nz);
+        // 不折叠的位置，供 MSD 使用
+        Rux[n] += dx;
+        Ruy[n] += dy;
+        Ruz[n] += dz;
+
+        Rx[n] += dx;
+        Ry[n] += dy;
+        Rz[n] += dz;
+
+        // 周期边界（修 C5：fmod 对负数返回负值，边界会破）
+        if      (Rx[n] <  0.0) { Rx[n] += Lx; }
+        else if (Rx[n] >= Lx ) { Rx[n] -= Lx; }
+        if      (Ry[n] <  0.0) { Ry[n] += Ly; }
+        else if (Ry[n] >= Ly ) { Ry[n] -= Ly; }
+        if      (Rz[n] <  0.0) { Rz[n] += Lz; }
+        else if (Rz[n] >= Lz ) { Rz[n] -= Lz; }
     }
-
 }

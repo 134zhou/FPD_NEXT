@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "Common.h"
+#include "Check.h"
 
 
 // 函数声明
