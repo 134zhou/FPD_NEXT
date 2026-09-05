@@ -30,13 +30,38 @@
 
 ```bash
 cmake -B build && cmake --build build -j
-./build/main
+./build/fpd config/production.cfg
 ```
 
 环境：nvc++ 26.3（NVIDIA HPC SDK）、CUDA 13.1、CMake 4.2.3、RTX 3060 12 GB。
 
-> 注：`build/` 里原有的构建产物来自另一台机器（缓存路径为 `/home/rebecca/VSCode_File/...`），
-> 已清理并重新配置。`build/result/` 保留了上一代码的输出，仅供参考。
+产出两个可执行文件：`build/fpd`（模拟，需 GPU）和 `build/fpd_tool`（检查工具，纯 CPU）。
+
+## 输入输出
+
+**C++ 只写二进制 `.fpd`；可视化由 Python 离线转换，不占模拟热路径。**
+初始构型、检查点、重启文件是**同一个格式**，文件里的 `step` 决定从哪继续。
+
+```bash
+# 1. 生成初始构型（纯 stdlib，任何 python3 都能跑）
+python3 tools/make_init.py --grid 128 64 32 --single -o out/init.fpd
+
+# 2. 跑模拟
+./build/fpd config/production.cfg --set init_file=out/init.fpd
+
+# 3. 断点续跑：把某个检查点当 init_file 即可，同一个 key、同一段代码
+./build/fpd config/production.cfg --set init_file=out/prod_0010000.fpd
+
+# 4. 离线转可视化（必须 pvpython —— 系统 python3 无 numpy）
+PV=/home/doll/Software/ParaView-6.2.0-RC1-MPI-Linux-Python3.12-x86_64
+$PV/bin/pvpython tools/fpd2vtk.py out/prod_*.fpd -o vis/
+# 然后在 ParaView 里打开 vis/prod.pvd —— 一个文件给出完整时间动画 + 流体/粒子双 block
+```
+
+格式规范在 `src/include/IOBin.h`，Python 侧镜像实现在 `tools/fpd_format.py`。
+检查点只存跨步状态（`vx,vy,vz` + `R,Ru` + 标量）加上可视化要的 `p,V,F`；
+`eta`/`sum_phi`/`f`/`pi` 全是每步重算的派生量，不存。
+128×64×32 时 8.39 MB/个，写入约 **3.9 ms**（旧 ASCII VTK 约 100 ms，快 26 倍）。
 
 ## 当前状态
 
@@ -47,10 +72,11 @@ cmake -B build && cmake --build build -j
 | 相场 / 粘度场构造 | ✅ C1/C3/C7/C8 已修 |
 | 力投影 / 粒子速度 | ✅ C1/C2/C4/C5 已修 |
 | 粒子间相互作用力 | ❌ 未实现（`F[n]` 恒为 0） |
-| 多粒子 / 初始构型读取 | ❌ 未实现（硬编码 N=1） |
+| 多粒子 / 初始构型 | ✅ `tools/make_init.py` 生成 `.fpd` |
 | 热噪声按 kT 标定 | ✅ 流体侧（3A）+ 粒子侧（3B）均已验证 |
 | λ^T / M_i 常量表 | ✅ `--lambda`，三种独立方法交叉验证 |
-| 配置文件 / checkpoint | ❌ 未实现 |
+| 配置文件 / checkpoint | ✅ Phase 2 完成，重启逐位复现 |
+| 可视化 | ✅ `tools/fpd2vtk.py` 离线转 VTK（ParaView 开一个 .pvd） |
 | 定量验证 | ❌ 未做 |
 
 ### 性能
@@ -132,7 +158,7 @@ C6（噪声标定）留待 Phase 3，在那之前不要相信任何涉及布朗�
 ## 自检
 
 ```bash
-./build/main --check     # 力守恒 + 亚格点不变性 + 多粒子重叠
+./build/fpd --check     # 力守恒 + 亚格点不变性 + 多粒子重叠
 ```
 
 **每次改动 `Stencil.h` / `Viscosity` / `Force` / `Velocity` 后都必须重跑**，
@@ -162,7 +188,7 @@ eta_max 分离 49.85 ≈ 50（C3 修复前是 ~50.85）；重叠 90.5
 ## 噪声标定（测试 3A，已完成）
 
 ```bash
-./build/main --noise [L] [dt] [kT] [steps]      # 默认 32 0.01 1.0 200000
+./build/fpd --noise [L] [dt] [kT] [steps]      # 默认 32 0.01 1.0 200000
 ```
 
 无粒子的纯流体（η ≡ 1），检验能量均分 `⟨|v|²⟩ = 2kT/(ρ·dV) = 2kT`。
@@ -201,8 +227,8 @@ eta_max 分离 49.85 ≈ 50（C3 修复前是 ~50.85）；重叠 90.5
 ## 常量表与粒子能量均分（测试 3B，已完成）
 
 ```bash
-./build/main --lambda                                    # 常量表，秒级，无需 GPU
-./build/main --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]
+./build/fpd --lambda                                    # 常量表，秒级，无需 GPU
+./build/fpd --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]
 ```
 
 ### 常量表

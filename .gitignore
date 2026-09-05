@@ -18,3 +18,12 @@ doc/old_code/init/
 
 # spike 的编译产物（源码入库，二进制不入）
 spike/spike
+
+# 模拟输出与可视化产物
+out/
+vis/
+*.fpd
+
+# Python 缓存
+__pycache__/
+*.pyc

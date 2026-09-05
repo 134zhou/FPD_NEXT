@@ -9,14 +9,50 @@
 
 ```bash
 cmake -B build && cmake --build build -j     # nvc++ 26.3 + CUDA 13.1 + CMake 4.2.3
-./build/main --check                          # 自检：力守恒 / 亚格点不变 / 混叠 / N=2 重叠
-./build/main --lambda [L]                     # 常量表 λ^T, M_i（纯 CPU，秒级）
-./build/main --noise [L] [dt] [kT] [steps]    # 测试 3A：纯流体噪声谱
-./build/main --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]   # 测试 3B
-./build/main                                  # 生产运行（当前 128x64x32, N=1, 20 万步）
+                                              # 产出 build/fpd（模拟）与 build/fpd_tool（纯 CPU 工具）
+
+./build/fpd config/smoke.cfg [--set k=v ...]  # 生产运行；--set 覆盖配置项
+./build/fpd --check                           # 自检：力守恒 / 亚格点不变 / 混叠 / N=2 重叠
+./build/fpd --lambda [L]                      # 常量表 λ^T, M_i（纯 CPU，秒级）
+./build/fpd --noise [L] [dt] [kT] [steps]     # 测试 3A：纯流体噪声谱
+./build/fpd --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]   # 测试 3B
+
+./build/fpd_tool --dump-ckpt <f> [--at i j k] # 看 .fpd 头部 / 指定格点的值
+./build/fpd_tool --diff-ckpt <a> <b>          # 逐位比较两个检查点
+
+# Python 侧（见下方「IO 与可视化」）
+python3 tools/make_init.py --grid 128 64 32 --single -o out/init.fpd
+$PV/bin/pvpython tools/fpd2vtk.py out/*.fpd -o vis/
+
 cmake --build build -j 2>&1 | grep -i error   # 编译错误
 nvc++ -acc -O3 -Isrc/include -Minfo=accel -c src/X.cpp -o /tmp/x.o   # 看 kernel 生成
 ```
+
+## IO 与可视化
+
+**C++ 只写二进制 `.fpd`，绝不产出可视化格式。** 初始构型、检查点、重启文件都是同一个格式，
+文件里的 `step` 决定从哪继续 —— 所以 C++ 除配置文件外没有任何文本解析。
+格式规范在 `src/include/IOBin.h`，Python 侧镜像实现在 `tools/fpd_format.py`。
+
+| 脚本 | 依赖 | 跑在哪 |
+|---|---|---|
+| `tools/make_init.py` | **纯 stdlib** | 任何 python3（含裸 conda base） |
+| `tools/fpd2vtk.py` | numpy + vtk | **必须 pvpython**（系统 python3 无 numpy） |
+| `tools/verify_vtk.py` | numpy + vtk + paraview | 必须 pvpython |
+
+`PV=/home/doll/Software/ParaView-6.2.0-RC1-MPI-Linux-Python3.12-x86_64`
+
+转换后在 ParaView 里**打开一个 `vis/<name>.pvd`** 就得到完整时间动画 + 流体/粒子双 block。
+`fpd2vtk.py` 不手写 XML，全部交给 VTK 自己的 writer。
+
+> ⚠️ **C++ 与 Python 共同定义同一个二进制格式**，这是新的漂移点。改动任一侧后必须重跑：
+> ```bash
+> python3 tools/make_init.py --grid 8 4 2 --pattern index --empty -o /tmp/t.fpd
+> ./build/fpd_tool --dump-ckpt /tmp/t.fpd --at 3 1 1     # 必须报 3001001
+> $PV/bin/pvpython tools/fpd2vtk.py --self-test          # 轴序与插值方向
+> ```
+> `IDX = i + j*Nx + k*Nx*Ny` 意味着 numpy 必须 reshape 成 `(Nz, Ny, Nx)`，**x 是最后一维**。
+> 搞反不报错，只得到一个转置的场。FNV-1a 校验和同样是两处独立实现。
 
 环境：RTX 3060 12 GB。实测吞吐：**153 步/秒**（128×64×32）、**1128 步/秒**（32³）。
 注意 32³ 只有 1/8 的格点却只快 7.4 倍 —— 那个规模已接近**启动延迟主导**。
@@ -41,7 +77,22 @@ nvc++ -acc -O3 -Isrc/include -Minfo=accel -c src/X.cpp -o /tmp/x.o   # 看 kerne
 ### 2. 改完必须重跑 `--check`
 
 动过 `Stencil.h` / `Viscosity.cpp` / `Force.cpp` / `Velocity.cpp` 之后**必须**跑
-`./build/main --check`，全绿才算数。`stencil_point` 是单点故障，它错了三个模块一起错。
+`./build/fpd --check`，全绿才算数。`stencil_point` 是单点故障，它错了三个模块一起错。
+
+### 2b. 随机数流按 step 定位，**不要改成累计记账**
+
+`Stokes.cpp` 每步生成前显式 `curandSetGeneratorOffset` 到
+`offset(step,c) = (2*step+c) * size*3`。这看起来绕，但是实测逼出来的：
+
+- 只有 **Philox** 支持有意义的 offset；XORWOW（原来的 `CURAND_RNG_PSEUDO_DEFAULT`）
+  和 MRG32K3A 都对不上，**无法逐位重启**
+- **「生成 n 个数后序列前进 n」是错的**：`offset=1*n` 能对上第 2 批，
+  但 `2n`、`3n` 都对不上连续生成的对应批次。所以任何累计记账都会失配
+- 但同一 offset 生成同样数量必定逐位可复现，不同 slot 之间零共同值、
+  互相关 ~1/√n（统计独立）
+
+证据在 `spike/spike_rng_offset.cpp`、`spike_rng_slice.cpp`、`spike_rng_advance.cpp`。
+`.fpd` 里的 `rng_draws` 字段**仅供人读**，读回时不采信，offset 一律由 step 重算。
 
 ### 3. 两个测试盲区（都真实骗过人）
 
@@ -73,6 +124,8 @@ cell 数不足 3、z 向边界 hack、重力硬编码），详见 `README.md`。
 
 - **`present()` 遗漏不报错，只给垃圾数据**。nvc++ 对未列出的裸指针走隐式查找，通常「碰巧能跑」。
   每次给函数加数组参数，必须同步检查所有 `present()`
+- **`#pragma acc update` 不能放在 lambda 里** —— 闭包捕获让运行时查不到设备映射，
+  运行时报 `data in update host clause was not found on device`。用普通函数或直接内联
 - `#pragma acc routine seq` 作用于**模板函数**可行（已验证），但 pragma 要放在 `template<...>` **之前**
 - 写到**网格**上必须用 `atomic`（多粒子支撑域会重叠）；写到**每粒子标量**上用
   `parallel loop gang` + 内层 `loop vector reduction`，不要用 atomic 打同一地址
@@ -92,7 +145,7 @@ cell 数不足 3、z 向边界 hack、重力硬编码），详见 `README.md`。
 - **`Σφ_α²` 三方向一致性是交错混叠的判据**（`Σφ_α` 只是 k=0 分量）。已并入 `--check`
 - **平衡时间**：最慢模式 `τ = (L/2π)²/ν`。做平衡态统计时盒子越大越慢，
   纯流体测试务必用小立方盒（L=128 要 41 万步，L=32 只要 2.6 万步）
-- **λ^T、M_i 等常量必须用与模拟相同的离散求和**（`./build/main --lambda`）。
+- **λ^T、M_i 等常量必须用与模拟相同的离散求和**（`./build/fpd --lambda`）。
   理由是**自洽性**，不是格点不准 —— 格点其实精确到 5e-6。
   但**绝不能用解析球体 `(4/3)πa³`**：真值比它大 24.1%，那是扩散界面的曲率项
   （`+8πaξ²π²/24`），误用会让 `M_i` 差 24%，直接毁掉验证

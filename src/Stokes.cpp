@@ -14,7 +14,8 @@ void step_navier_stokes
     cufftHandle plan,
     curandGenerator_t gen,
     double* randD, double* randN,
-    double* tmp_fx, double* tmp_fy, double* tmp_fz
+    double* tmp_fx, double* tmp_fy, double* tmp_fz,
+    long step
 )
 {
     int Nx = cfg.Nx, Ny = cfg.Ny, Nz = cfg.Nz;
@@ -23,9 +24,16 @@ void step_navier_stokes
 
     // --- 1. 生成随机噪声 (Σ 项) ---
     // randD: 0,1,2 对应 xx, yy, zz 方向；randN: 0,1,2 对应 xy, yz, zx 方向
+    // 每次生成前显式定位到本步专属的 slot，不依赖「上次生成后序列前进了多少」
+    // —— 实测那个前进量并非 n，累计记账会失配（详见 Stokes.h 的说明）。
+    const unsigned long long slot = 3ULL * (unsigned long long)size;
+    const unsigned long long base = 2ULL * (unsigned long long)step * slot;
+
     #pragma acc host_data use_device(randD, randN)
     {
+        CURAND_CHECK(curandSetGeneratorOffset(gen, base));
         CURAND_CHECK(curandGenerateNormalDouble(gen, randD, size * 3, 0.0, 1.0));
+        CURAND_CHECK(curandSetGeneratorOffset(gen, base + slot));
         CURAND_CHECK(curandGenerateNormalDouble(gen, randN, size * 3, 0.0, 1.0));
     }
     

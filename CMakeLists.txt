@@ -21,25 +21,24 @@ add_link_options(-acc)
 # 4. 查找 CUDA 库
 find_package(CUDAToolkit REQUIRED)
 
-# 5. 定义源文件列表
-set(SOURCES
-    src/main.cpp
+# 5. 核心静态库
+#    验证程序与生产程序【必须走同一条代码路径】，否则验证结果不能外推到生产。
+#    另外 OpenACC 的 TU 编译很慢，拆库避免每个可执行都重编一遍核函数。
+add_library(fpd_core STATIC
     src/Stokes.cpp
-    src/IO.cpp
     src/Force.cpp
     src/Viscosity.cpp
     src/Velocity.cpp
     src/Analysis.cpp
-
+    src/Config.cpp
+    src/IOBin.cpp
 )
+target_link_libraries(fpd_core PUBLIC CUDA::cudart CUDA::curand CUDA::cufft)
 
-# 6. 生成可执行文件
-add_executable(main ${SOURCES})
+# 6. 模拟主程序
+add_executable(fpd src/main.cpp)
+target_link_libraries(fpd PRIVATE fpd_core)
 
-# 7. 链接 CUDA 相关库
-target_link_libraries(main 
-    PRIVATE 
-    CUDA::cudart 
-    CUDA::curand 
-    CUDA::cufft
-)
+# 7. 纯 CPU 的检查工具（不需要 GPU，可在无卡机器上跑）
+add_executable(fpd_tool src/tool_main.cpp)
+target_link_libraries(fpd_tool PRIVATE fpd_core)
