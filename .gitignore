@@ -16,5 +16,5 @@ doc/old_code/init/
 .idea/
 *.swp
 
-# 参考基线（Phase 0 归档，本地保留即可）
-baseline/
+# spike 的编译产物（源码入库，二进制不入）
+spike/spike

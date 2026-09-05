@@ -4,7 +4,16 @@
       "Agent",
       "WebSearch",
       "Bash(cd *)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(awk -F: 'NR==0{next}')",
+      "Bash(python3 -c ' *)",
+      "Bash(rm *)",
+      "Bash(apt list *)",
+      "Bash(python3 -m pip --version)",
+      "Bash(pip3 list *)",
+      "Bash(nvc++ *)",
+      "Bash(make *)",
+      "Bash(cmake *)"
     ]
   }
 }
