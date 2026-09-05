@@ -224,21 +224,26 @@ dt 扫描（各档总物理时间相同 T=600）：
 
 ## 待办：下一步
 
-**按顺序进 Phase 2（配置文件 + FpdState + IO/重启），或先做 Phase 4。**
-3B 已解除 dt 选择上的不确定性，不再有阻塞项。
+**建议直接进 Phase 4（Stokes 阻力 + VAF/MSD）。** Phase 0/1/2/3 全部完成，
+没有阻塞项：3B 解除了 dt 的不确定性（生产可用 0.002），Phase 2 给了配置系统和断点重启。
+
+Phase 4 的关键设计已经想清楚：**必须做 L∈{64,96,128,192} 外推** ——
+a/L=0.05 时 Hasimoto 有限尺寸修正是 **14% 偏差**，远大于要验证的几个百分点，
+不外推就得不出可信的 λ^T。而从阻力反解出的 λ^T 与 `--lambda` 的 1.68885 对照，
+是**静态平衡 vs 稳态耗散两条完全不同的物理路径**交叉验证同一个常量，证据力很强。
 
 ### 其余待办
 
-- **`FpdState` 未做**（Phase 2 唯一未完成项）。四个自检路径
+- **`FpdState` 未做**（Phase 2 唯一未完成项，**不阻塞 Phase 4**）。四个自检路径
   （`run_force_conservation_check` / `run_overlap_check` / `run_noise_check` /
   `run_equipartition_check`）各自复制了一份分配-映射-释放样板，共 4 份漂移风险 ——
   这是下一个 C1/C2 式漂移的温床。生产路径已改完，收益主要在自检路径，可随时补
-- **Phase 4**：Stokes 阻力（**必须做 L∈{64,96,128,192} 外推**，
-  a/L=0.05 时 Hasimoto 修正是 14% 偏差）、VAF/MSD 在线累积。
-  从测得的阻力反解 λ^T 与 `--lambda` 的 1.68885 对照 —— **两条完全不同的物理路径
-  （静态平衡 vs 稳态耗散）交叉验证同一个常量**
-- **Phase 5**：势函数 enum+switch 接口、O(N²) 参考实现、修好的 cell list
-- **Phase 6**：生产算例，边界条件三选一（先复现旧行为建立对照）
+- **Phase 5**：势函数 enum+switch 接口、O(N²) 参考实现、修好的 cell list。
+  注意旧 cell list 有 `nnIndex[12]` 未赋值的 bug 且 z 向 cell 数不足 3，
+  363 粒子直接用 O(N²) 才是正解
+- **Phase 6**：生产算例，边界条件三选一（先复现旧行为建立对照，别一次改两个变量）
+- **性能优化未立项**：128×64×32 只有 153 步/秒。Phase 4 的 L=192 是 27 倍网格量，
+  若排期吃紧，瓶颈在 `Stokes.cpp` 散度计算的约 18 次邻居访问（`k±1` 跨步 64 KB）
 
 ### 备选池（有价值但未立项）
 
@@ -293,16 +298,34 @@ dt 扫描（各档总物理时间相同 T=600）：
    当前不是瓶颈，若 profiling 显示有影响，改成返回小结构体
 5. **截断半径与旧代码不同**：本实现 `range2 = range² = 64`（半径 8），
    旧代码开 `_8BLOCKLOOP_` 时用 `49`（半径 7），`∫φ` 差约 0.3%。不追求逐位一致
-6. `storage/test_Stokes_only.cpp` 已失效但**未删除**（`git rm` 被环境反复拦截）。
-   不参与构建。它的纯流体驱动骨架已被 `--noise` 模式吸收
+6. **C++ 与 Python 共同定义 `.fpd` 格式**（Phase 2 引入的新漂移点）。
+   两处独立实现同一个布局和同一个 FNV-1a 哈希，改动任一侧必须重跑互操作判据 ——
+   `--dump-ckpt --at 3 1 1` 应报 `3001001`，`fpd2vtk.py --self-test` 应全 PASS。
+   轴序（numpy 要 reshape 成 `(Nz,Ny,Nx)`）搞反不报错，只得到一个转置的场
 
 ---
 
 ## 提交历史
 
 ```
+9ed91b5  Phase 2: 配置文件 + 二进制 .fpd IO + 逐位重启, C++ 不再产出可视化格式
+1574432  测试 3B: 粒子能量均分验证 + 常量表, 证实 O(dt) 偏差不被 eta 放大
+48b8fb3  补充 CLAUDE.md 与 PROGRESS.md
 9695701  测试 3A: 纯流体噪声谱验证, dt 扫描证实偏差为 O(dt) 且外推为零
 c0c0e53  Phase 1: 交错网格封装 + 修复 C1-C5/C7-C9/C11
 ae13f10  Phase 0: 基线固化 - README 记录缺陷清单, spike 验证模板 routine seq 可行
 6b2a9c7  初始提交：FPD_NEXT 现状基线
+```
+
+## 文件地图
+
+```
+src/            Stencil.h(交错网格唯一真值源) Common.h(POD+工厂) Check.h
+                Stokes/Viscosity/Force/Velocity(物理)  Analysis(常量表+分块平均)
+                Config(key=value) IOBin(.fpd)  main.cpp(生产+4个自检) tool_main.cpp
+tools/          fpd_format.py(格式镜像) make_init.py(纯stdlib) fpd2vtk.py verify_vtk.py(pvpython)
+spike/          template_routine(模板+routine seq) rng_offset/rng_slice/rng_advance(RNG 语义)
+config/         smoke.cfg production.cfg
+baseline/       各阶段实验日志与参考轨迹
+doc/old_code/   上一代 OpenMP 实现，仅供参考、不是真值
 ```

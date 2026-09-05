@@ -81,21 +81,33 @@ $PV/bin/pvpython tools/fpd2vtk.py out/prod_*.fpd -o vis/
 
 ### 性能
 
-128×64×32、N=1、RTX 3060：**153 步/秒**（GPU 利用率 99%，显存 170 MB）。
+实测吞吐（RTX 3060，GPU 利用率均 99%）：
+
+| 网格 | 步/秒 | 备注 |
+|---|---|---|
+| 128×64×32 | **153** | 显存 170 MB；200k 步 ≈ 22 分钟 |
+| 32³ | **1128** | 格点少 8 倍却只快 7.4 倍 —— 已接近启动延迟主导 |
+
 瓶颈在 `Stokes.cpp` 的场 kernel —— 散度计算里对 6 个 Π 数组做了约 18 次邻居访问，
 其中 `k±1` 的跨步是 `Nx*Ny` = 64 KB，对缓存不友好。
 
-据此估算机时：200k 步 ≈ 22 分钟；Phase 4 的 L=192 立方盒是 27 倍网格量，需相应放大。
-**性能优化不在 Phase 1 范围内**（先保正确性），但 Phase 4 排期时要按这个数算。
+检查点写入约 **3.9 ms/次**（8.39 MB，128×64×32），相对 6.5 ms/步的主循环可忽略。
+
+> **性能优化尚未立项**（一直是先保正确性）。Phase 4 的 L=192 立方盒是 27 倍网格量，
+> 排期按实测数算，别用「小盒子会快很多」的直觉。
 
 **流体求解器为什么可信**：`src/Stokes.cpp` 的泊松解用的是 7 点差分格式的**精确离散本征值**
 `0.5/(cos kx + cos ky + cos kz - 3)`，而不是连续谱的 `-k²`，与第 3 阶段的有限差分离散严格自洽。
 `cufftPlan3d(Nz,Ny,Nx)` 与 `IDX(i,j,k)=i+j*Nx+k*Nx*Ny` 的搭配也已核对无误。
 
-## 缺陷清单
+## 缺陷清单（历史记录）
 
-以下每条都已逐行对照源码确认。**C1-C5、C7-C9、C11 已在 Phase 1 修复并有数值判据佐证；
-C6（噪声标定）留待 Phase 3，在那之前不要相信任何涉及布朗运动的结果。**
+以下每条都已逐行对照源码确认。**C1-C11 全部已修复并有数值判据佐证**：
+C1-C5、C7-C9、C11 在 Phase 1，C6（噪声标定）在测试 3A/3B，C10 由 `make_ns_config()` 保证。
+
+保留这份清单是因为它记录了**缺陷的成因和为什么当时看不出来** ——
+尤其 C2「N=1 时数学上恰好抵消，骗过 20 万步模拟」这类教训，
+比修复本身更值得记住。行号指的是修复前的旧代码。
 
 ### 致命：交错网格归一化被塌缩
 
@@ -320,17 +332,43 @@ M_i = ρ(∫φ)²/∫φ²    = 287.62          M_eff = 1.5 M_i = 431.43
 截断半径的差异：本实现用 `range2 = range² = 64`（半径 8）；旧代码开 `_8BLOCKLOOP_` 时用
 `RANGE_CORE² = 49`（半径 7），二者 `∫φ` 差约 0.3%。不追求与旧结果逐位一致。
 
+## 断点重启（Phase 2，已完成）
+
+```bash
+./build/fpd config/smoke.cfg --set run_name=A                              # 一口气 5 步
+./build/fpd config/smoke.cfg --set run_name=B --set n_steps=2              # 先跑 2 步
+./build/fpd config/smoke.cfg --set run_name=B --set init_file=out/B_0000002.fpd
+./build/fpd_tool --diff-ckpt out/A_0000005.fpd out/B_0000005.fpd           # 必须逐位相同
+```
+
+**N=1 与 N=2 均实测逐位相同。** `n_steps` 是**绝对目标步数**：
+从 step=2 的文件启动、`n_steps=5`，则再跑 3 步到 5。
+
+### RNG：实测推翻了「累计记账」方案
+
+逐位重启的唯一难点是 cuRAND 没有状态序列化 API。实测发现两件事：
+
+1. **只有 Philox 支持有意义的 offset**。XORWOW（原来的 `CURAND_RNG_PSEUDO_DEFAULT`）
+   和 MRG32K3A 试了系数 1/2/4 都对不上，**根本无法逐位重启**
+2. **「生成 n 个数后序列前进 n」这个模型是错的**：`offset=1*n` 能对上第 2 批，
+   但 `2n`、`3n` 都对不上连续生成的对应批次 —— 所以任何累计记账从前提上就不成立
+
+改用 **slot 方案**：每次生成前显式定位到 `offset(step,c) = (2*step+c)*size*3`。
+已验证不同 slot 之间零共同值、互相关 ~1/√n（统计独立），同一 offset 逐位可复现。
+**重启因此无需恢复任何 RNG 内部状态，只需 seed 相同 —— 逐位相等是构造上保证的。**
+
+证据：`spike/spike_rng_offset.cpp`、`spike_rng_slice.cpp`、`spike_rng_advance.cpp`。
+
+### 可视化往返校验
+
+用 pvpython 把 `.vtm` 读回、与源 `.fpd` 逐点比对（`tools/verify_vtk.py`）：
+时间轴、双 block、所有数组相对差 **0.000e+00**。这比「检查 XML 是否合法」强得多 ——
+验证的是 ParaView 实际看到的数值与模拟真正写出的数值一致。
+
 ## 基线
 
 `baseline/phase0_particle_traj.txt` —— 修改前的原始代码跑 19 万步的单粒子轨迹
 （`W=10` 即 kT=0.05，dt=0.001）。Phase 1 修完缺陷后数值结果**必然改变**，此文件仅供定性对照。
 
-## 遗留文件
-
-`storage/test_Stokes_only.cpp` —— **已失效，不参与构建**。三处与当前代码不符：
-调用了已重命名的 `save_vtk()`；`cufftPlan3d(Nx,Ny,Nz)` 维度顺序与 `main.cpp` 的 `(Nz,Ny,Nx)` 相反；
-第 31 行用的是旧索引约定 `(i*Ny+j)*Nz+k`。
-
-保留是因为它有一个有价值的骨架：**无粒子的纯流体驱动**（`eta≡1` + 初始速度块）——
-正是 Phase 3 测试 3A（纯流体噪声谱 `⟨|v|²⟩ = 2kT`）需要的结构。改造时以它为起点，
-但上述三处必须先修。
+其余归档：`phase1_stability_200k.log`、`phase3a_dt_scan.log`、
+`phase3b_equipart.log`、`phase3b_constants.txt`。
