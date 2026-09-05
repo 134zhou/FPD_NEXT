@@ -1,0 +1,63 @@
+开始模拟：128x64x32  N=1  dt=0.001  kT=0.05  W=10  a=3.2  eta_c/eta_l=50
+Saved: result/result_0.vtk
+Saved: result/particles_0.vtk
+step        0   R = (64.0000, 32.0000, 16.0000)   0.0 步/秒
+Saved: result/result_10000.vtk
+Saved: result/particles_10000.vtk
+step    10000   R = (63.9692, 32.0492, 15.9598)   154.1 步/秒
+Saved: result/result_20000.vtk
+Saved: result/particles_20000.vtk
+step    20000   R = (63.9690, 32.0564, 15.9723)   154.2 步/秒
+Saved: result/result_30000.vtk
+Saved: result/particles_30000.vtk
+step    30000   R = (63.9787, 31.9933, 16.0501)   154.2 步/秒
+Saved: result/result_40000.vtk
+Saved: result/particles_40000.vtk
+step    40000   R = (63.9002, 31.9394, 16.1194)   147.2 步/秒
+Saved: result/result_50000.vtk
+Saved: result/particles_50000.vtk
+step    50000   R = (63.8984, 31.9403, 16.0717)   135.3 步/秒
+Saved: result/result_60000.vtk
+Saved: result/particles_60000.vtk
+step    60000   R = (63.8493, 31.9283, 16.0027)   128.3 步/秒
+Saved: result/result_70000.vtk
+Saved: result/particles_70000.vtk
+step    70000   R = (63.7604, 31.9453, 15.9985)   123.8 步/秒
+Saved: result/result_80000.vtk
+Saved: result/particles_80000.vtk
+step    80000   R = (63.6942, 31.9117, 15.9023)   120.5 步/秒
+Saved: result/result_90000.vtk
+Saved: result/particles_90000.vtk
+step    90000   R = (63.6283, 31.8547, 15.9389)   118.0 步/秒
+Saved: result/result_100000.vtk
+Saved: result/particles_100000.vtk
+step   100000   R = (63.5723, 31.7842, 15.9606)   116.2 步/秒
+Saved: result/result_110000.vtk
+Saved: result/particles_110000.vtk
+step   110000   R = (63.5973, 31.7836, 15.9156)   114.7 步/秒
+Saved: result/result_120000.vtk
+Saved: result/particles_120000.vtk
+step   120000   R = (63.5375, 31.8446, 15.8517)   113.5 步/秒
+Saved: result/result_130000.vtk
+Saved: result/particles_130000.vtk
+step   130000   R = (63.4935, 31.8293, 15.8461)   113.1 步/秒
+Saved: result/result_140000.vtk
+Saved: result/particles_140000.vtk
+step   140000   R = (63.4570, 31.8268, 15.8526)   115.3 步/秒
+Saved: result/result_150000.vtk
+Saved: result/particles_150000.vtk
+step   150000   R = (63.4857, 31.8526, 15.8636)   116.6 步/秒
+Saved: result/result_160000.vtk
+Saved: result/particles_160000.vtk
+step   160000   R = (63.5187, 31.7664, 15.8550)   115.6 步/秒
+Saved: result/result_170000.vtk
+Saved: result/particles_170000.vtk
+step   170000   R = (63.5794, 31.7295, 15.8386)   114.7 步/秒
+Saved: result/result_180000.vtk
+Saved: result/particles_180000.vtk
+step   180000   R = (63.6251, 31.7679, 15.8436)   113.9 步/秒
+Saved: result/result_190000.vtk
+Saved: result/particles_190000.vtk
+step   190000   R = (63.5663, 31.7884, 15.8366)   113.2 步/秒
+
+Done. Final vx[0]: -0.2

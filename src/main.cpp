@@ -2,8 +2,10 @@
 #include <iomanip>
 #include <vector>
 #include <cstring>
+#include <cstdlib>
 #include <cmath>
 #include <chrono>
+#include <string>
 #include <openacc.h>
 
 #include "./include/Common.h"
@@ -222,6 +224,147 @@ static int run_overlap_check(NS_Config cfg, PhiParams pp)
     return failures;
 }
 
+// ============================================================================
+// 测试 3A：纯流体噪声谱（无粒子）
+//
+// 不可压流体每个 k 模式只有 2 个横向自由度（纵向被投影算子消掉），
+// 能量均分给出   <|v|^2> = 2 kT / (rho * dV) = 2 kT   （rho = dV = 1）
+//
+// 这个测试【完全绕开】相场、力投影、速度平均的全部机制，直接检验：
+//   (a) W = sqrt(2kT/dt) 的标定是否正确
+//   (b) 随机应力缺少 -2/3 delta delta 迹项的影响（不可压投影应当消掉迹部分）
+//   (c) FFT 投影本身是否正确
+//
+// 【时间尺度】最慢模式弛豫 tau = (L/2pi)^2 / nu。必须用小立方盒，
+// 否则 L=128 时要 40 万步才平衡。无粒子时 eta=1，稳定性限制 dt < dx^2/(2*3*eta) = 1/6，
+// 可以用比生产算例大得多的步长。
+// ============================================================================
+static int run_noise_check(int L, double dt, double kT, long n_steps)
+{
+    NS_Config cfg = make_ns_config(L, L, L, dt, kT, true);
+    PhiParams pp  = make_phi_params(3.2, 1.0, 50.0);   // 无粒子，仅占位
+
+    const int size = L * L * L;
+    const int N    = 0;                                 // 关键：无粒子
+
+    const double nu       = 1.0;                        // eta_l / rho
+    const double tau_slow = (L/(2.0*M_PI))*(L/(2.0*M_PI))/nu;   // 最慢模式弛豫时间
+    const long   n_equil  = (long)(5.0 * tau_slow / dt);        // 弃掉 5 个弛豫时间
+
+    std::cout << "=== 测试 3A：纯流体噪声谱 ===\n"
+              << "  盒子 " << L << "^3   dt = " << dt << "   kT = " << kT
+              << "   W = " << cfg.W << "\n"
+              << "  最慢模式 tau = " << std::fixed << std::setprecision(1) << tau_slow
+              << " (= " << (long)(tau_slow/dt) << " 步)"
+              << "   弃掉前 " << n_equil << " 步\n";
+
+    if (n_steps <= n_equil)
+    {
+        std::cout << "  ** 总步数不足以平衡，至少需要 " << (n_equil*2) << " 步 **\n";
+        return 1;
+    }
+
+    std::vector<double> vx(size,0.0), vy(size,0.0), vz(size,0.0), p(size,0.0);
+    std::vector<double> fx(size,0.0), fy(size,0.0), fz(size,0.0);
+    std::vector<double> eta(size), etaXY(size), etaYZ(size), etaZX(size);
+    std::vector<double> fft_data(size*2), randD(size*3), randN(size*3);
+    std::vector<double> tfx(size), tfy(size), tfz(size);
+    std::vector<double> pdx(size), pdy(size), pdz(size), pnx(size), pny(size), pnz(size);
+    std::vector<double> Rx(1,0.0), Ry(1,0.0), Rz(1,0.0), Fx(1,0.0), Fy(1,0.0), Fz(1,0.0);
+    std::vector<double> spx(1,1.0), spy(1,1.0), spz(1,1.0);
+
+    double *d_vx=vx.data(), *d_vy=vy.data(), *d_vz=vz.data(), *d_p=p.data();
+    double *d_fx=fx.data(), *d_fy=fy.data(), *d_fz=fz.data();
+    double *d_eta=eta.data(), *d_eXY=etaXY.data(), *d_eYZ=etaYZ.data(), *d_eZX=etaZX.data();
+    double *d_fft=fft_data.data(), *d_rD=randD.data(), *d_rN=randN.data();
+    double *d_tfx=tfx.data(), *d_tfy=tfy.data(), *d_tfz=tfz.data();
+    double *d_pdx=pdx.data(), *d_pdy=pdy.data(), *d_pdz=pdz.data();
+    double *d_pnx=pnx.data(), *d_pny=pny.data(), *d_pnz=pnz.data();
+    double *d_Rx=Rx.data(), *d_Ry=Ry.data(), *d_Rz=Rz.data();
+    double *d_Fx=Fx.data(), *d_Fy=Fy.data(), *d_Fz=Fz.data();
+    double *d_spx=spx.data(), *d_spy=spy.data(), *d_spz=spz.data();
+
+    cufftHandle plan;
+    CUFFT_CHECK(cufftPlan3d(&plan, cfg.Nz, cfg.Ny, cfg.Nx, CUFFT_Z2Z));
+    curandGenerator_t gen;
+    CURAND_CHECK(curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT));
+    CURAND_CHECK(curandSetPseudoRandomGeneratorSeed(gen, 20260905ULL));
+
+    #pragma acc enter data copyin(d_vx[0:size], d_vy[0:size], d_vz[0:size], d_p[0:size])
+    #pragma acc enter data copyin(d_fx[0:size], d_fy[0:size], d_fz[0:size])
+    #pragma acc enter data copyin(d_Rx[0:1], d_Ry[0:1], d_Rz[0:1], d_Fx[0:1], d_Fy[0:1], d_Fz[0:1])
+    #pragma acc enter data copyin(d_spx[0:1], d_spy[0:1], d_spz[0:1])
+    #pragma acc enter data create(d_eta[0:size], d_eXY[0:size], d_eYZ[0:size], d_eZX[0:size])
+    #pragma acc enter data create(d_fft[0:size*2], d_rD[0:size*3], d_rN[0:size*3])
+    #pragma acc enter data create(d_tfx[0:size], d_tfy[0:size], d_tfz[0:size])
+    #pragma acc enter data create(d_pdx[0:size], d_pdy[0:size], d_pdz[0:size])
+    #pragma acc enter data create(d_pnx[0:size], d_pny[0:size], d_pnz[0:size])
+
+    double acc_v2 = 0.0;
+    long   n_samp = 0;
+
+    for (long step = 0; step < n_steps; step++)
+    {
+        // N=0：eta 被重置为 1（背景值），f 被清零。正是纯流体所需。
+        update_viscosity_fields(cfg, pp, N, d_Rx, d_Ry, d_Rz,
+                                d_spx, d_spy, d_spz, d_eta, d_eXY, d_eYZ, d_eZX);
+        update_force_field(cfg, pp, N, d_Rx, d_Ry, d_Rz, d_Fx, d_Fy, d_Fz,
+                           d_spx, d_spy, d_spz, d_fx, d_fy, d_fz);
+        step_navier_stokes(cfg, d_vx, d_vy, d_vz, d_p, d_fx, d_fy, d_fz,
+                           d_eta, d_eXY, d_eYZ, d_eZX,
+                           d_pdx, d_pdy, d_pdz, d_pnx, d_pny, d_pnz,
+                           d_fft, plan, gen, d_rD, d_rN, d_tfx, d_tfy, d_tfz);
+
+        // 平衡后每 100 步采一次样（去关联）
+        if (step >= n_equil && step % 100 == 0)
+        {
+            double s = 0.0;
+            #pragma acc parallel loop reduction(+:s) present(d_vx, d_vy, d_vz)
+            for (int i = 0; i < size; i++)
+            {
+                s += d_vx[i]*d_vx[i] + d_vy[i]*d_vy[i] + d_vz[i]*d_vz[i];
+            }
+            acc_v2 += s / (double)size;
+            n_samp++;
+        }
+
+        if (step % 10000 == 0)
+        {
+            std::cout << "  step " << std::setw(7) << step
+                      << (n_samp > 0
+                          ? ("   <|v|^2>/2kT = " + std::to_string(acc_v2/n_samp/(2.0*kT)))
+                          : std::string("   (平衡中)"))
+                      << std::endl;
+        }
+    }
+
+    const double v2       = acc_v2 / (double)n_samp;
+    const double v2_theory = 2.0 * kT;
+    const double ratio    = v2 / v2_theory;
+
+    std::cout << std::scientific << std::setprecision(6)
+              << "  <|v|^2> 实测 = " << v2 << "   (" << n_samp << " 个样本)\n"
+              << "  <|v|^2> 理论 = " << v2_theory << "  = 2kT\n"
+              << std::fixed << std::setprecision(4)
+              << "  比值 = " << ratio << "   偏差 " << std::showpos
+              << (ratio-1.0)*100.0 << "%" << std::noshowpos
+              << (std::fabs(ratio-1.0) < 0.02 ? "   PASS" : "   FAIL") << "\n";
+
+    #pragma acc exit data delete(d_vx[0:size], d_vy[0:size], d_vz[0:size], d_p[0:size])
+    #pragma acc exit data delete(d_fx[0:size], d_fy[0:size], d_fz[0:size])
+    #pragma acc exit data delete(d_Rx[0:1], d_Ry[0:1], d_Rz[0:1], d_Fx[0:1], d_Fy[0:1], d_Fz[0:1])
+    #pragma acc exit data delete(d_spx[0:1], d_spy[0:1], d_spz[0:1])
+    #pragma acc exit data delete(d_eta[0:size], d_eXY[0:size], d_eYZ[0:size], d_eZX[0:size])
+    #pragma acc exit data delete(d_fft[0:size*2], d_rD[0:size*3], d_rN[0:size*3])
+    #pragma acc exit data delete(d_tfx[0:size], d_tfy[0:size], d_tfz[0:size])
+    #pragma acc exit data delete(d_pdx[0:size], d_pdy[0:size], d_pdz[0:size])
+    #pragma acc exit data delete(d_pnx[0:size], d_pny[0:size], d_pnz[0:size])
+    CUFFT_CHECK(cufftDestroy(plan));
+    CURAND_CHECK(curandDestroyGenerator(gen));
+
+    return (std::fabs(ratio - 1.0) < 0.02) ? 0 : 1;
+}
+
 int main(int argc, char** argv)
 {
     // Phase 2 会把这些搬进配置文件
@@ -243,6 +386,16 @@ int main(int argc, char** argv)
         std::cout << "\n";
         fails += run_overlap_check(cfg, pp);
         return fails;
+    }
+
+    // 测试 3A：--noise [L] [dt] [kT] [steps]
+    if (argc > 1 && std::strcmp(argv[1], "--noise") == 0)
+    {
+        const int    L_    = (argc > 2) ? std::atoi(argv[2]) : 32;
+        const double dt_   = (argc > 3) ? std::atof(argv[3]) : 0.01;
+        const double kT_   = (argc > 4) ? std::atof(argv[4]) : 1.0;
+        const long   nst_  = (argc > 5) ? std::atol(argv[5]) : 200000;
+        return run_noise_check(L_, dt_, kT_, nst_);
     }
 
     const int size = cfg.Nx * cfg.Ny * cfg.Nz;
