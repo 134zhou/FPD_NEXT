@@ -1,0 +1,119 @@
+#ifndef MATRIX_H
+#define MATRIX_H
+
+
+void onesMatrix(double ***data,vector3D box);
+void zerosMatrix(double ***data,vector3D box);
+void zerosMatrix(vector3D ***data,vector3D box);
+
+
+
+/* these functions initialize to zero the values of the arrays */
+#define Vector1D(array,dim,type)                                               \
+array=calloc(dim,sizeof(type));
+
+
+#define Free1D(array)                                                          \
+free(array);
+
+#define Matrix2D(array,dim1,dim2,type)                                         \
+do{                                                                            \
+    int j;                                                                     \
+    array=(type**)malloc((dim1)*sizeof(type*));                                \
+    array[0]=(type*)calloc((dim1)*(dim2),sizeof(type));                        \
+    for (j=0;j<(dim1);j++)                                                     \
+    {                                                                          \
+        array[j]=array[0]+j*(dim2);                                            \
+    }                                                                          \
+} while (0);
+
+#define Matrix2DSafe(array,dim1,dim2,buffer_space,type)                        \
+do{                                                                            \
+    int j;                                                                     \
+    array=(type**)malloc((dim1)*sizeof(type*));                                \
+    array[0]=(type*)calloc((dim1)*(dim2)+buffer_space,sizeof(type));           \
+    for (j=0;j<(dim1);j++)                                                     \
+    {                                                                          \
+        array[j]=array[0]+j*(dim2);                                            \
+    }                                                                          \
+} while (0);
+
+/* the first element of array[0] is just a buffer */
+#define UpperTriangularMatrix(array,dim,type)                                  \
+do{                                                                            \
+    int j;                                                                     \
+    array=(type**)malloc(((dim)-1)*sizeof(type*));                             \
+    array[0]=(type*)calloc(1+(((dim)*(dim-1))/2),sizeof(type));                \
+    for (j=0;j<(dim)-1;j++)                                                    \
+    {                                                                          \
+        array[j]=array[0]+1+j*(dim)-((j+1)*(j+2))/2;                           \
+    }                                                                          \
+} while (0);
+
+
+#define Free2D(array)                                                          \
+free(array[0]);                                                                \
+free(array);
+
+
+
+#define Matrix3D(array,dim1,dim2,dim3,type)                                    \
+do{                                                                            \
+    int j,k;                                                                   \
+    type *mem;                                                                 \
+    array=(type***)malloc((dim1)*sizeof(type**));                              \
+    array[0]=(type**)malloc((dim1)*(dim2)*sizeof(type*));                      \
+    mem=(type*)calloc((dim1)*(dim2)*(dim3),sizeof(type));                      \
+    for (k=0;k<(dim1);k++)                                                     \
+    {                                                                          \
+        array[k]=array[0]+k*(dim2);                                            \
+            for (j=0;j<(dim2);j++)                                             \
+            {                                                                  \
+                array[k][j]=mem+k*(dim2)*(dim3)+j*(dim3);                      \
+            }                                                                  \
+    }                                                                          \
+} while (0);
+
+
+#define Free3D(array)                                                     \
+do{ \
+free(array[0][0]);\
+free(array[0]);\
+free(array);\
+} while (0);
+
+
+#define Matrix4D(array,dim1,dim2,dim3,dim4,type)                           \
+do{                                                                            \
+int i,j,k;                                                                     \
+type *mem;                                                                     \
+array=(type****)malloc((dim1)*sizeof(type***));                                \
+array[0]=(type***)malloc((dim1)*(dim2)*sizeof(type**));						   \
+array[0][0]=(type**)malloc((dim1)*(dim2)*(dim3)*sizeof(type*));				   \
+mem=(type*)calloc((dim1)*(dim2)*(dim3)*(dim4),sizeof(type));                   \
+for (k=0;k<(dim1);k++)                                                         \
+{                                                                              \
+array[k]=array[0]+k*(dim2);													   \
+for (j=0;j<(dim2);j++)                                                         \
+{                                                                              \
+array[k][j]=array[0][0]+k*(dim2)*(dim3)+j*(dim3);							   \
+for (i=0;i<(dim3);i++)                                                         \
+{                                                                              \
+array[k][j][i]=mem+k*(dim2)*(dim3)*(dim4)+j*(dim3)*(dim4)+i*(dim4);            \
+}                                                                              \
+}                                                                              \
+}                                                                              \
+} while (0);
+
+
+#define Free4D(array)                                            \
+do{                                                                            \
+free(array[0][0][0]);                                                          \
+free(array[0][0]);                                                             \
+free(array[0]);                                                                \
+free(array);                                                                   \
+} while (0);
+
+
+#endif
+

@@ -1,0 +1,1 @@
+./main init/data output 1000 0.07

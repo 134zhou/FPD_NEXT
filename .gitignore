@@ -1,0 +1,20 @@
+# 构建产物
+build/
+*.o
+*.mod
+
+# 模拟输出
+result/
+output/
+*.vtk
+
+# 旧代码的初始构型文件（合计 1.6 GB，不入版本控制）
+doc/old_code/init/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 参考基线（Phase 0 归档，本地保留即可）
+baseline/
