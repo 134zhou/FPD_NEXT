@@ -21,7 +21,19 @@ std::vector<FieldDesc> config_fields(FpdConfig& c)
         {"ratio_eta",      F_DOUBLE, &c.ratio_eta,      true,  "eta_c / eta_l"},
 
         {"gravity_z",      F_DOUBLE, &c.gravity_z,      false, "z 向外场力（每粒子）"},
+        {"gravity_x",      F_DOUBLE, &c.gravity_x,      false, "x 向外场力（每粒子）"},
+        {"gravity_y",      F_DOUBLE, &c.gravity_y,      false, "y 向外场力（每粒子）"},
+        {"gravity_compensate", F_INT, &c.gravity_compensate, false, "1=外场叠加背景力密度抵消 k=0 漂移"},
         {"noise_on",       F_INT,    &c.noise_on,       false, "0/1，关掉则 W=0"},
+
+        {"potential",      F_STRING, &c.potential,      false, "粒子间势: none|wca|morse|lj126"},
+        {"pot_eps",        F_DOUBLE, &c.pot_eps,        false, "WCA/LJ 的 ε"},
+        {"pot_sigma",      F_DOUBLE, &c.pot_sigma,      false, "WCA/LJ 的 σ"},
+        {"pot_De",         F_DOUBLE, &c.pot_De,         false, "Morse 阱深 De"},
+        {"pot_alpha",      F_DOUBLE, &c.pot_alpha,      false, "Morse 宽度参数 alpha"},
+        {"pot_r_eq",       F_DOUBLE, &c.pot_r_eq,       false, "Morse 平衡距离 r_eq"},
+        {"pot_rcut",       F_DOUBLE, &c.pot_rcut,       false, "LJ/Morse 截断半径（WCA 派生，不应给）"},
+        {"pot_shift",      F_STRING, &c.pot_shift,      false, "截断移位: none|energy|force"},
 
         {"init_file",      F_STRING, &c.init_file,      false, ".fpd 初始构型或续跑文件；留空用内置默认"},
         {"out_dir",        F_STRING, &c.out_dir,        false, "输出目录"},
@@ -169,6 +181,7 @@ bool load_config(const char* path, FpdConfig& c, std::string& err)
             return false;
         }
         seen[hit] = true;
+        c.keys_given.push_back(key);
     }
 
     // 必填项缺失也必须报错 —— 不给默认值兜底
@@ -205,9 +218,32 @@ bool apply_override(FpdConfig& c, const char* kv, std::string& err)
     std::vector<FieldDesc> tab = config_fields(c);
     for (size_t i = 0; i < tab.size(); i++)
     {
-        if (key == tab[i].key) { return set_field(tab[i], val, err); }
+        if (key == tab[i].key)
+        {
+            if (!set_field(tab[i], val, err)) { return false; }
+            c.keys_given.push_back(key);
+            return true;
+        }
     }
     err = std::string("--set 用了未知的配置项 '") + key + "'" + suggest(tab, key);
+    return false;
+}
+
+// 势参数查表的 helper：防「用不到的参数被静默忽略」。
+static bool is_pot_param(const std::string& key)
+{
+    return key.size() > 4 && key.compare(0, 4, "pot_") == 0;
+}
+static bool potential_uses(const std::string& pot, const std::string& key)
+{
+    if (pot == "wca")   { return key == "pot_eps" || key == "pot_sigma"; }
+    if (pot == "morse") { return key == "pot_De" || key == "pot_alpha" || key == "pot_r_eq" || key == "pot_rcut"; }
+    if (pot == "lj126") { return key == "pot_eps" || key == "pot_sigma" || key == "pot_rcut"; }
+    return false;
+}
+static bool was_given(const std::vector<std::string>& keys, const std::string& k)
+{
+    for (size_t i = 0; i < keys.size(); i++) { if (keys[i] == k) { return true; } }
     return false;
 }
 
@@ -234,6 +270,87 @@ bool validate_config(const FpdConfig& c, std::string& err)
           << " 超过了最短的网格边 " << nmin << "（粒子会通过周期边界与自己作用）";
         err = o.str();
         return false;
+    }
+
+    // --- 势函数检查：合法性 ---
+    if (c.potential != "none" && c.potential != "wca" && c.potential != "morse" && c.potential != "lj126")
+    {
+        err = "potential 的合法取值是 none | wca | morse | lj126，收到 '" + c.potential + "'";
+        return false;
+    }
+    if (c.pot_shift != "none" && c.pot_shift != "energy" && c.pot_shift != "force")
+    {
+        err = "pot_shift 的合法取值是 none | energy | force，收到 '" + c.pot_shift + "'";
+        return false;
+    }
+
+    // --- 参数查表：用不到的势参数报错（静默忽略是浪费一天的事故）---
+    for (size_t i = 0; i < c.keys_given.size(); i++)
+    {
+        const std::string& k = c.keys_given[i];
+        if (is_pot_param(k) && k != "pot_shift" && !potential_uses(c.potential, k))
+        {
+            err = "potential = " + c.potential + " 用不到 " + k + "，请删掉它或改 potential";
+            return false;
+        }
+    }
+    // 需要的势参数必须给（不给默认值兜底，与必填项一致）
+    {
+        const char* needed[4] = {0, 0, 0, 0};
+        if (c.potential == "wca")   { needed[0]="pot_eps";  needed[1]="pot_sigma"; }
+        if (c.potential == "morse") { needed[0]="pot_De";   needed[1]="pot_alpha"; needed[2]="pot_r_eq"; needed[3]="pot_rcut"; }
+        if (c.potential == "lj126") { needed[0]="pot_eps";  needed[1]="pot_sigma"; needed[2]="pot_rcut"; }
+        std::string missing;
+        for (int j = 0; j < 4; j++)
+        {
+            if (needed[j] && !was_given(c.keys_given, needed[j]))
+            { missing += (missing.empty() ? "" : ", "); missing += needed[j]; }
+        }
+        if (!missing.empty())
+        {
+            err = "potential = " + c.potential + " 需要 " + missing + "（势参数不给默认值兜底）";
+            return false;
+        }
+    }
+
+    // --- 最小镜像硬约束：rcut < min(N)/2（严格小于，等号会双重计数镜像）---
+    if (c.potential != "none")
+    {
+        PotentialParams potp = make_potential_params(c);
+        const double half = 0.5 * (double)nmin;
+        if (potp.rcut >= half)
+        {
+            std::ostringstream o;
+            o << "势截断 rcut = " << potp.rcut << " 不小于最短网格边的一半 " << half
+              << "（min(Nx,Ny,Nz) = " << nmin << "），周期最小镜像约定不成立"
+              << "（旧代码 cutoff=22.2 配 Nz=32 正是这个错误）";
+            err = o.str();
+            return false;
+        }
+
+        // 残余力比：|U'(rcut)| / max|U'|，> 1e-6 报警（shift=force 时力在 rcut 恒 0，跳过）。
+        // 峰值在【物理可达区】[2a, rcut] 上取 —— 下界是粒子直径 2a，更近就重叠了，
+        // 那里 U' 可大几个量级但物理不可达，会稀释残余力比。
+        if (c.pot_shift != "force")
+        {
+            const double r_lo = 2.0 * c.radius;
+            double max_du = 0.0;
+            for (int k = 0; k <= 500; k++)
+            {
+                const double r  = r_lo + (potp.rcut - r_lo) * (double)k / 500.0;
+                const double du = std::fabs(pair_force_over_r_bare(potp, r) * r);
+                if (du > max_du) { max_du = du; }
+            }
+            const double du_rc   = std::fabs(pair_force_over_r_bare(potp, potp.rcut) * potp.rcut);
+            const double rho_res = max_du > 0.0 ? du_rc / max_du : 0.0;
+            if (rho_res > 1e-6)
+            {
+                fprintf(stderr,
+                        "[警告] 势在 rcut=%g 处残余力比 |U'(rcut)|/max|U'| = %.3e > 1e-6，"
+                        "能量移位后力仍跳变。可改 pot_shift=force（改势形状）、调大盒子或调 pot_alpha\n",
+                        potp.rcut, rho_res);
+            }
+        }
     }
 
     // 显式粘性项的稳定性上界，只警告不拒绝（用户可能在做 dt 扫描）
@@ -286,6 +403,19 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
     ofs << "# derived range    = " << pp.range  << "\n";
     ofs << "# derived n_range  = " << pp.n_range << "\n";
     ofs << "# derived range2   = " << pp.range2 << "\n";
+    if (c.potential != "none")
+    {
+        PotentialParams potp = make_potential_params(c);
+        ofs << "# potential       = " << c.potential << "   shift = " << c.pot_shift
+            << "   rcut = " << potp.rcut << "\n";
+        ofs << "#   U(rcut) = " << potp.u_at_rc << "   U'(rcut) = " << potp.dudr_at_rc << "\n";
+    }
+    ExternalField ext = make_external_field(c);
+    if (ext.gx != 0.0 || ext.gy != 0.0 || ext.gz != 0.0)
+    {
+        ofs << "# external_field  = (" << ext.gx << ", " << ext.gy << ", " << ext.gz
+            << ")   compensate = " << c.gravity_compensate << "\n";
+    }
     return true;
 }
 
@@ -308,4 +438,30 @@ NS_Config make_ns_config(const FpdConfig& c)
 PhiParams make_phi_params(const FpdConfig& c)
 {
     return make_phi_params(c.radius, c.xi, c.ratio_eta);
+}
+
+PotentialParams make_potential_params(const FpdConfig& c)
+{
+    int type;
+    if      (c.potential == "wca")   { type = POT_WCA;   }
+    else if (c.potential == "morse") { type = POT_MORSE; }
+    else if (c.potential == "lj126") { type = POT_LJ126; }
+    else                             { type = POT_NONE;  }
+
+    int shift;
+    if      (c.pot_shift == "none")   { shift = SHIFT_NONE;   }
+    else if (c.pot_shift == "force")  { shift = SHIFT_FORCE;  }
+    else                              { shift = SHIFT_ENERGY; }
+
+    return make_potential_params(type, shift, c.pot_eps, c.pot_sigma,
+                                 c.pot_De, c.pot_alpha, c.pot_r_eq, c.pot_rcut);
+}
+
+ExternalField make_external_field(const FpdConfig& c)
+{
+    ExternalField ext;
+    ext.gx = c.gravity_x;
+    ext.gy = c.gravity_y;
+    ext.gz = c.gravity_z;
+    return ext;
 }

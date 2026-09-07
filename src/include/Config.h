@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include "Common.h"
+#include "Potential.h"
 
 // ============================================================================
 // 主机侧完整参数集。含 std::string，【永不进 GPU】。
@@ -29,8 +30,21 @@ struct FpdConfig
     double ratio_eta = 0.0;
 
     // --- 物理（可选）---
+    double gravity_x = 0.0;
+    double gravity_y = 0.0;
     double gravity_z = 0.0;
+    int    gravity_compensate = 1;   // 外场叠加背景力密度，抵消 k=0 漂移（过渡；壁面 Phase 后转 0）
     int    noise_on = 1;
+
+    // --- 粒子间势（可选；potential=none 时以下全部不用）---
+    std::string potential = "none";   // none | wca | morse | lj126
+    double pot_eps    = 0.0;          // WCA/LJ 的 ε
+    double pot_sigma  = 0.0;          // WCA/LJ 的 σ
+    double pot_De     = 0.0;          // Morse 阱深
+    double pot_alpha  = 0.0;          // Morse 宽度参数（叫 alpha 不叫 a —— a 是粒子半径）
+    double pot_r_eq   = 0.0;          // Morse 平衡距离
+    double pot_rcut   = 0.0;          // LJ/Morse 截断（WCA 派生，用户不应给）
+    std::string pot_shift = "energy"; // none | energy | force
 
     // --- IO（可选）---
     std::string init_file;       // .fpd；留空则用内置默认（单粒子放盒心）
@@ -41,6 +55,9 @@ struct FpdConfig
     int  save_pressure = 1;      // 存 p 便于可视化；重启时忽略
 
     unsigned long long seed = 1234ULL;
+
+    // 显式设置过的 key 名（防「用不到的参数被静默忽略」）
+    std::vector<std::string> keys_given;
 };
 
 // ---------------------------------------------------------------------------
@@ -71,5 +88,7 @@ void print_config_help();
 
 NS_Config make_ns_config(const FpdConfig& c);
 PhiParams make_phi_params(const FpdConfig& c);
+PotentialParams make_potential_params(const FpdConfig& c);
+ExternalField  make_external_field(const FpdConfig& c);
 
 #endif
