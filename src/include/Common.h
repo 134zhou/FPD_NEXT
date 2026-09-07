@@ -12,6 +12,7 @@ struct NS_Config
     int    Nx, Ny, Nz;
     double dt, inv_dt;
     double W;           // 噪声强度系数，应由 kT 派生：W = sqrt(2*kT/dt)
+    int    wall_z;      // 0 = z 周期（默认）；1 = z 上下无滑移壁面（Phase 7）
 };
 
 // --- 相场参数（POD，按值进 GPU kernel）---
@@ -52,13 +53,15 @@ static inline PhiParams make_phi_params(double radius, double xi, double ratio_e
 
 // 由 dt 构造 NS_Config，保证 inv_dt 与 W 永远自洽（修 C10 / C6）
 static inline NS_Config make_ns_config(int Nx, int Ny, int Nz,
-                                       double dt, double kT, bool noise_on)
+                                       double dt, double kT, bool noise_on,
+                                       int wall_z = 0)
 {
     NS_Config cfg;
     cfg.Nx = Nx; cfg.Ny = Ny; cfg.Nz = Nz;
     cfg.dt     = dt;
     cfg.inv_dt = 1.0 / dt;
     cfg.W      = noise_on ? sqrt(2.0 * kT / dt) : 0.0;
+    cfg.wall_z = wall_z;
     return cfg;
 }
 

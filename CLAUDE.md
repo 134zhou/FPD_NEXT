@@ -137,6 +137,14 @@ vector-reduction-over-j，零 atomic），求和顺序在固定 N 与固定 gang
 的 N=3、`--check` 的 J5、`fpd_tool --verify-forces`），生产热路径走 GPU 版。
 两份实现必须独立维护（不互调），否则「GPU vs CPU 对照」判据退化成自洽的、盲的。
 
+### 7. 改 `Poisson.cpp` 必须同步改 `doc/PressurePoisson.md` 并重跑 `--check-poisson`
+
+`src/Poisson.cpp` 与 `doc/PressurePoisson.md` **共同定义** `div∘grad` 算子（Phase 7-A
+引入的新漂移点，与 C++/Python 共同定义 `.fpd` 是同一类风险）。改求解器后必须：
+同步更新文档 §12 的公式 ↔ 代码对照表，并重跑 `./build/fpd_check --check-poisson`。
+归一化因子（周期 `size`、壁面 `Nx·Ny`）在 `solve_pressure` 里**只出现一次**，别散落。
+壁面 `(0,0)` 奇异列用 `d_0 -= 1` 定规，**不许整列清零**（那会删掉支撑粒子重量的静压）。
+
 ## 代码约定
 
 - **命名**：小写 = 流体场（`vx`、`fx`、`eta`），大写 = 粒子量（`Vx`、`Fx`、`Rx`）。贯穿全代码，别破坏

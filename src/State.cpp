@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <openacc.h>
 #include "./include/Check.h"
+#include "./include/Poisson.h"
 
 // 运行时 API 的映射建立/删除（S0-A spike 已验证这些映射能被 present() 认账）。
 // 注意字节数一律用 (size_t) 显式转换，size*sizeof(double) 是 size_t 运算。
@@ -72,6 +73,14 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
         pi_nx = h_pi_nx.data(); pi_ny = h_pi_ny.data(); pi_nz = h_pi_nz.data();
         tmp_fx = h_tmp_fx.data(); tmp_fy = h_tmp_fy.data(); tmp_fz = h_tmp_fz.data();
         fft = h_fft.data(); randD = h_randD.data(); randN = h_randN.data();
+
+        // 壁面模式：三对角前推系数（主机侧一次性预算，与右端无关）
+        if (cfg.wall_z)
+        {
+            h_tri_w.assign(size, 0);
+            tri_w = h_tri_w.data();
+            build_tridiag_coeffs(cfg, tri_w);
+        }
     }
 
     // --- 设备映射 ---
@@ -100,12 +109,21 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
         api_create(fft, size * 2 * sizeof(double));
         api_create(randD, size * 3 * sizeof(double));
         api_create(randN, size * 3 * sizeof(double));
+        if (cfg.wall_z) { api_copyin(tri_w, nbSize); }
     }
 
     // --- FFT plan + RNG ---
     if (want & ST_SOLVER)
     {
         CUFFT_CHECK(cufftPlan3d(&plan, cfg.Nz, cfg.Ny, cfg.Nx, CUFFT_Z2Z));
+        // 壁面模式：xy 向批量 2D FFT（batch=Nz）。cuFFT row-major，n[] 最后一维最快，
+        // 我们 x 最快 ⇒ n={Ny,Nx}。z-slab 在 IDX 布局下天然连续（idist=Nx*Ny），无需重排。
+        if (cfg.wall_z)
+        {
+            int n[2] = { cfg.Ny, cfg.Nx };
+            CUFFT_CHECK(cufftPlanMany(&plan_xy, 2, n, NULL, 1, cfg.Nx * cfg.Ny,
+                                      NULL, 1, cfg.Nx * cfg.Ny, CUFFT_Z2Z, cfg.Nz));
+        }
         // 【统一 Philox】3A/3B 原来用 XORWOW（CURAND_RNG_PSEUDO_DEFAULT），
         // 生产用 Philox。CMakeLists 要求验证与生产走同一代码路径，且 XORWOW
         // 无法逐位重启（见 PROGRESS.md），故统一为 Philox。
@@ -125,6 +143,7 @@ void FpdState::finish()
         api_delete(randN, size * 3 * sizeof(double));
         api_delete(randD, size * 3 * sizeof(double));
         api_delete(fft, size * 2 * sizeof(double));
+        if (tri_w) { api_delete(tri_w, nbSize); tri_w = 0; }
         api_delete(tmp_fz, nbSize); api_delete(tmp_fy, nbSize); api_delete(tmp_fx, nbSize);
         api_delete(pi_nz, nbSize); api_delete(pi_ny, nbSize); api_delete(pi_nx, nbSize);
         api_delete(pi_dz, nbSize); api_delete(pi_dy, nbSize); api_delete(pi_dx, nbSize);
@@ -147,6 +166,7 @@ void FpdState::finish()
         api_delete(Rz, nbN); api_delete(Ry, nbN); api_delete(Rx, nbN);
     }
     if (plan) { CUFFT_CHECK(cufftDestroy(plan)); plan = 0; }
+    if (plan_xy) { CUFFT_CHECK(cufftDestroy(plan_xy)); plan_xy = 0; }
     if (gen)  { CURAND_CHECK(curandDestroyGenerator(gen)); gen = 0; }
     parts = 0;
 }

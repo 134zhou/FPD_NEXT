@@ -1,0 +1,86 @@
+=== Phase 7-A 压力泊松求解器 判据日志 2026-09-07 ===
+
+--- spike_fft2d_batch（8x6x5 与 32x16x8）---
+[tridiag spike 编译 OK]
+=== spike_fft2d_batch：2D 批量 FFT vs 3D FFT ===
+盒子 8 x 6 x 5   (size = 240)
+
+  P1  2D批量+zDFT vs 3DFFT    max 相对差 = 1.041e-14   PASS
+  P2  2D 批量 forward+inverse 放大 == Nx*Ny=48   max|err| = 2.132e-14   PASS
+      (若误用 size=Nx*Ny*Nz=240，p 会小 Nz=5 倍)
+  P3  inembed=NULL vs inembed=n   max 绝对差 = 0.000e+00   PASS
+
+全部通过
+
+--- spike_tridiag ---
+=== spike_tridiag：Thomas vs 稠密 Gauss + 奇异列定规 ===
+
+  T1  Nz= 2  lam=-0.10   Thomas vs Gauss  max 相对差 = 1.433e-16   PASS
+  T1  Nz= 2  lam=-1.00   Thomas vs Gauss  max 相对差 = 0.000e+00   PASS
+  T1  Nz= 2  lam=-3.00   Thomas vs Gauss  max 相对差 = 0.000e+00   PASS
+  T1  Nz= 2  lam=-8.00   Thomas vs Gauss  max 相对差 = 2.707e-16   PASS
+  T1  Nz= 6  lam=-0.10   Thomas vs Gauss  max 相对差 = 1.543e-16   PASS
+  T1  Nz= 6  lam=-1.00   Thomas vs Gauss  max 相对差 = 1.564e-16   PASS
+  T1  Nz= 6  lam=-3.00   Thomas vs Gauss  max 相对差 = 1.153e-16   PASS
+  T1  Nz= 6  lam=-8.00   Thomas vs Gauss  max 相对差 = 8.302e-17   PASS
+  T1  Nz=32  lam=-0.10   Thomas vs Gauss  max 相对差 = 1.341e-16   PASS
+  T1  Nz=32  lam=-1.00   Thomas vs Gauss  max 相对差 = 1.638e-16   PASS
+  T1  Nz=32  lam=-3.00   Thomas vs Gauss  max 相对差 = 1.601e-16   PASS
+  T1  Nz=32  lam=-8.00   Thomas vs Gauss  max 相对差 = 1.321e-16   PASS
+  T1  Nz=64  lam=-0.10   Thomas vs Gauss  max 相对差 = 2.371e-16   PASS
+  T1  Nz=64  lam=-1.00   Thomas vs Gauss  max 相对差 = 1.779e-16   PASS
+  T1  Nz=64  lam=-3.00   Thomas vs Gauss  max 相对差 = 1.197e-16   PASS
+  T1  Nz=64  lam=-8.00   Thomas vs Gauss  max 相对差 = 1.247e-16   PASS
+  T2  奇异列定规  Nz=32   |A0 x - b| = 4.441e-16 (PASS)   |x_0| = 2.220e-16 (PASS)
+  T3  不相容右端 Σb=32≠0  解漂移 |x[Nz-1]-x[0]| = 4.960e+02   PASS（证明减均值非多余）
+
+全部通过
+
+--- fpd_check --check-tridiag ---
+=== 泊松三对角自检（纯 CPU，无卡可跑）===
+  三对角 Nz=2：Thomas vs 稠密 Gauss（全 12 列）  PASS
+      Nz= 2  max 相对差 = 1.807e-16
+  三对角 Nz=6：Thomas vs 稠密 Gauss（全 12 列）  PASS
+      Nz= 6  max 相对差 = 2.060e-16
+  三对角 Nz=32：Thomas vs 稠密 Gauss（全 16 列） PASS
+      Nz=32  max 相对差 = 2.041e-16
+  三对角 Nz=64：Thomas vs 稠密 Gauss（全 4 列）  PASS
+      Nz=64  max 相对差 = 2.843e-16
+  奇异列 (0,0) 定规：x_0 ≈ 0 且满足原 Neumann 方程 PASS
+      |x_0| = 8.216e-15   |A0 x - b| = 8.216e-15
+
+全部通过
+
+--- fpd_check --check-poisson ---
+=== 泊松算子往返判据（需 GPU）===
+  P5 周期算子往返（偶 Nz）                        PASS
+      8x4x6 (wall_z=0)   max|(p-p_ref)-mean| = 4.051e-16   阈值 9.983e-11
+  P5 壁面算子往返（偶 Nz）                        PASS
+      8x4x6 (wall_z=1)   max|(p-p_ref)-mean| = 4.302e-16   阈值 9.983e-11
+      相容性残差 |Σb̂| = 0.000e+00   （应 ~机器精度，非 O(1)）
+  P5 周期算子往返（奇 Nz）                        PASS
+      6x6x5 (wall_z=0)   max|(p-p_ref)-mean| = 4.753e-16   阈值 9.991e-11
+  P5 壁面算子往返（奇 Nz）                        PASS
+      6x6x5 (wall_z=1)   max|(p-p_ref)-mean| = 4.853e-16   阈值 9.991e-11
+      相容性残差 |Σb̂| = 0.000e+00   （应 ~机器精度，非 O(1)）
+  P6 周期算子往返（中盒子）                     PASS
+      16x8x8 (wall_z=0)   max|(p-p_ref)-mean| = 6.670e-16   阈值 9.985e-11
+  P6 壁面算子往返（中盒子）                     PASS
+      16x8x8 (wall_z=1)   max|(p-p_ref)-mean| = 5.551e-16   阈值 9.985e-11
+      相容性残差 |Σb̂| = 0.000e+00   （应 ~机器精度，非 O(1)）
+  P6 相容性残差诊断（不相容右端应报非零且匹配 |Σb|） PASS
+      |Σ_{ijk} b|（主机） = 3.811e+00    diag = 3.811e+00
+
+全部通过
+
+--- fpd_check --check-poisson 128 64 32 ---
+=== 泊松算子往返判据（需 GPU）===
+  周期算子往返                                       PASS
+      128x64x32 (wall_z=0)   max|(p-p_ref)-mean| = 1.987e-15   阈值 1.000e-10
+  壁面算子往返                                       PASS
+      128x64x32 (wall_z=1)   max|(p-p_ref)-mean| = 2.665e-15   阈值 1.000e-10
+      相容性残差 |Σb̂| = 0.000e+00   （应 ~机器精度，非 O(1)）
+  P6 相容性残差诊断（不相容右端应报非零且匹配 |Σb|） PASS
+      |Σ_{ijk} b|（主机） = 3.811e+00    diag = 3.811e+00
+
+全部通过

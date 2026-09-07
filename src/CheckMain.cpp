@@ -45,6 +45,21 @@ int main(int argc, char** argv)
         return run_potential_check();
     }
 
+    // 压力泊松三对角自检：纯 CPU，无卡可跑
+    if (argc > 1 && std::strcmp(argv[1], "--check-tridiag") == 0)
+    {
+        return run_check_tridiag();
+    }
+
+    // 压力泊松算子往返判据：需 GPU（走 cuFFT）
+    if (argc > 1 && std::strcmp(argv[1], "--check-poisson") == 0)
+    {
+        const int Px = (argc > 2) ? std::atoi(argv[2]) : 0;
+        const int Py = (argc > 3) ? std::atoi(argv[3]) : 0;
+        const int Pz = (argc > 4) ? std::atoi(argv[4]) : 0;
+        return run_check_poisson(Px, Py, Pz);
+    }
+
     // 常量表：--lambda [L]   （纯 CPU，秒级）
     if (argc > 1 && std::strcmp(argv[1], "--lambda") == 0)
     {
@@ -93,6 +108,8 @@ int main(int argc, char** argv)
 
     std::cerr << "用法: fpd_check --check\n"
               << "      fpd_check --check-potential\n"
+              << "      fpd_check --check-tridiag\n"
+              << "      fpd_check --check-poisson [Nx Ny Nz]\n"
               << "      fpd_check --lambda [L]\n"
               << "      fpd_check --noise [L] [dt] [kT] [steps]\n"
               << "      fpd_check --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]\n";

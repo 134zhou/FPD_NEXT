@@ -1,12 +1,14 @@
 # 进度记录
 
-最后更新：2026-09-07（Phase 5 完成）
+最后更新：2026-09-07（Phase 7-A 完成）
 
 ## 一句话状态
 
 流体求解器、交错网格封装、噪声标定（流体侧+粒子侧）、配置系统与断点重启均已验证；
 **粒子间相互作用力（WCA/Morse/LJ126 + 外场）已实现并通过数值判据**；
-自检拆成独立可执行 `fpd_check`，`FpdState` 消除了 4 份分配/映射样板。
+自检拆成独立可执行 `fpd_check`，`FpdState` 消除了 4 份分配/映射样板；
+**z 向壁面泊松求解器（xy 2D FFT + z 向 Thomas）已实现并通过算子往返判据**，
+数学推导全文见 `doc/PressurePoisson.md`（尚未接线到 `Stokes.cpp`）。
 
 ## 总体规划
 
@@ -21,7 +23,7 @@
 | 4 | Stokes 阻力 + VAF/MSD + L 外推 | ⬜ 未开始（下一步） |
 | 5 | 粒子间力 + 外场 + fpd_check 拆分 | ✅ 完成（本次） |
 | 6 | 生产算例 + 旧代码对照 | ⬜ 未开始 |
-| 7 | z 向无滑移壁面（重力沉降） | ⬜ 未开始（用户要求立项，见下） |
+| 7 | z 向无滑移壁面（重力沉降） | 🔶 7-A 求解器完成；7-B 接线未开始 |
 
 完整计划（含各阶段的详细设计决策 D0-D8）：`~/.claude/plans/doc-doc-old-code-fuzzy-blum.md`
 
@@ -280,6 +282,44 @@ GPU 两次逐位）+ 不重叠构型的完整逐位重启」，而非「N=8 重�
 
 ---
 
+### Phase 7-A — 压力泊松求解器（xy 2D FFT + z 向三对角）
+
+Phase 7 要做的 z 向无滑移壁面，挡在最前面的是 `Stokes.cpp` 的压力泊松求解器整体是
+3D 全周期 FFT，z 不再周期后它整个失效。本轮按用户要求**只做求解器 + 判据 + 文档**，
+用合成右端的算子往返判据验证，`Stokes.cpp` 一行不动（生产路径零风险）。数学推导全文
+见 **`doc/PressurePoisson.md`**（与 `Poisson.cpp` 共同定义同一个 `div∘grad` 算子）。
+
+**交付**：
+
+| 模块 | 文件 | 说明 |
+|---|---|---|
+| 求解器 | `src/Poisson.{h,cpp}` | `solve_pressure` 按 `cfg.wall_z` 分派：周期 3D FFT（算术与 Stokes.cpp 一致）/ 壁面 xy 2D 批量 FFT + z 向 Thomas；`build_tridiag_coeffs` 预算前推系数 |
+| 配置 | `Common.h` 的 `NS_Config` 加 `wall_z` | 默认 0，`make_ns_config` 加默认参数，现有 4 处调用点零改动 |
+| 接线 | `State.{h,cpp}` | `tri_w` 数组 + `plan_xy` 句柄（`cufftPlanMany` batch=Nz） |
+| 判据 | `src/CheckPoisson.cpp` | `--check-tridiag`（纯 CPU）/ `--check-poisson`（需 GPU） |
+| 文档 | `doc/PressurePoisson.md` | 从离散 MAC 网格起的完整推导 + 实测数值 |
+
+**关键设计**（详见文档）：Neumann 边界**不是假设**，而是从「壁面法向面不修正」导出；
+`(0,0)` 奇异列用 `d_0 -= 1` 定规（有证明，非罚函数、非近似），**不能整列清零**
+（那会删掉支撑粒子重量的静压）；归一化因子是 `Nx·Ny` 不是 `size`（2D 变换点数）。
+
+**验证结果**（实测，非推导值）：
+
+```
+spike_fft2d_batch   P1 轴序 1.0e-14  P2 归一化 == Nx*Ny  P3 inembed 逐位相同
+spike_tridiag       T1 Thomas vs Gauss 2.8e-16  T2 定规 |x0|=2.2e-16  T3 不相容漂移 496
+--check-tridiag     三对角全列对照 2.8e-16；奇异列定规 |x0|=8.2e-15
+--check-poisson     壁面往返 4.3e-16（8x4x6）、2.7e-15（128x64x32）；周期往返 2.0e-15
+                    相容性诊断对不相容右端报 |Σb|=3.811（非 0）
+```
+
+> 算子往返抓到过一个真实 bug：`thomas_sweep` 里 z 向步长写成 1 而非 `Nx·Ny`，
+> 往返误差 O(1)。这是「手写独立算子 + 求解器」对照的判决性体现。
+
+日志：`baseline/phase7a_poisson.log`
+
+---
+
 ## 待办：下一步
 
 **建议直接进 Phase 4（Stokes 阻力 + VAF/MSD）。** Phase 0/1/2/3/5 全部完成，
@@ -295,11 +335,13 @@ a/L=0.05 时 Hasimoto 有限尺寸修正是 **14% 偏差**，远大于要验证�
 
 - **Phase 4**（Stokes 阻力 + VAF/MSD + L 外推）：下一步，无阻塞项。
   `FpdState` 已就位，加 VAF/MSD 分析路径时直接复用。
-- **Phase 7**（z 向无滑移壁面）：用户要求立项。上下都是无滑移硬壁。改动面是一个完整
-  Phase：泊松求解器从 3D 全周期 FFT 改 xy 向 2D FFT + z 向逐 (kx,ky) 三对角；
-  `Stokes.cpp`/`Stencil.h`/`Velocity.cpp` 的 z 向回绕全改；**3A/3B 的能量均分目标值
-  要重新推导**（模式基不再是纯 Fourier）。旧代码在这里是错的（z 向反射 hack 破坏
-  ∇·v=0），无照抄对象。壁面上线后 `gravity_compensate` 默认转 0。
+- **Phase 7-B**（z 向无滑移壁面接线）：7-A 已把求解器（`Poisson.cpp`）做出来并通过
+  算子往返判据。7-B 是把壁面 BC 接进生产：`Stokes.cpp` 重构为显式 `v*`（现在的源项是
+  `div(v*)/dt` 的展开式，边界上要扣的 `v*z[−1]` 分散在三处、打不了补丁）、`Wall.h`
+  作 z 向邻居访问的唯一真值源、相场在壁面截断（`FACE_Z` 有效范围 `k ∈ [0, Nz−2]`）、
+  粒子侧壁面排斥势与 `min_image` 分方向、配置项 `boundary_z`、端到端 W1–W8 判据。
+  **3A/3B 的能量均分目标值要重新推导**（模式基不再是纯 Fourier）。旧代码在这里是
+  错的（z 向反射 hack 破坏 ∇·v=0），无照抄对象。壁面上线后 `gravity_compensate` 默认转 0。
 - **cell list**：363 粒子 O(N²) 足够。GPU 方案下迁移阈值比原来的 `N > 2×10⁴` 还高
   （S0-C 实测 N=1000 仍只占 11%），具体以 N 标度实测为准。
 - **Phase 6**：生产算例，边界条件三选一（先复现旧行为建立对照，别一次改两个变量）
@@ -348,6 +390,8 @@ a/L=0.05 时 Hasimoto 有限尺寸修正是 **14% 偏差**，远大于要验证�
 | RNG 发生器 | 3A/3B 统一 Philox | CMakeLists 注释白纸黑字「验证与生产走同一代码路径」，且 XORWOW 无法逐位重启。代价是 3A/3B 数字变（统计等价），重跑 3B frozen 确认比值落在误差棒内 |
 | 外场 k=0 漂移 | `gravity_compensate`（默认 1）+ 背景力密度 bg=−ΣF/size | 均匀外场 ΣF=N·g≠0 使流体 k=0 线性加速、整盒漂移，废掉 3B 目标公式。壁面 Phase 7 上线后此开关默认转 0（壁面提供真实动量汇） |
 | `FpdState` 映射机制 | **运行时 API**（acc_copyin/acc_create/...） | spike_state_map 实测：运行时 API 建的映射能被另一 TU 的 present() 认账，成员函数 pragma 也可行；运行时 API 可查询（acc_is_present 支撑 require()） |
+| 壁面泊松 z 向求解 | **xy 2D 批量 FFT + 逐 (kx,ky) Thomas 三对角**，不用 DCT-II | cuFFT 无 DCT；2N 延拓/twiddle 技巧是「看起来对、归一化悄悄错」的典型。Thomas 约 20 行、无归一化歧义，且可扩展到非均匀 z 网格或 Robin 壁面。前推系数与右端无关 → 预算一次 |
+| 壁面泊松奇异列 (0,0) | **`d_0 -= 1` 定规**，而非整列清零 | 有证明（`𝟙ᵀA'x = −x₀` → `x₀=0` 且精确满足原方程），非罚函数、非近似。整列清零会删掉支撑粒子重量的静压（该列的 z 结构是水平均匀的竖直压力分布） |
 
 ---
 
@@ -374,6 +418,10 @@ a/L=0.05 时 Hasimoto 有限尺寸修正是 **14% 偏差**，远大于要验证�
    两处独立实现同一个布局和同一个 FNV-1a 哈希，改动任一侧必须重跑互操作判据 ——
    `--dump-ckpt --at 3 1 1` 应报 `3001001`，`fpd2vtk.py --self-test` 应全 PASS。
    轴序（numpy 要 reshape 成 `(Nz,Ny,Nx)`）搞反不报错，只得到一个转置的场
+7. **`doc/PressurePoisson.md` 与 `Poisson.cpp` 共同定义 `div∘grad` 算子**（Phase 7-A
+   引入的新漂移点）。改任一侧必须同步更新另一侧的 §12 对照表，并重跑
+   `--check-poisson`（`CLAUDE.md` 已列为第 7 条不可违反约束）。往返判据对
+   「算子与修正步不匹配」是盲的 —— 真正的 `∇·v=0` 端到端检验要等 7-B 接线后的 W1。
 
 ---
 

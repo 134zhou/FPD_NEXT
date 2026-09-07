@@ -77,6 +77,7 @@ $PV/bin/pvpython tools/fpd2vtk.py out/prod_*.fpd -o vis/
 | λ^T / M_i 常量表 | ✅ `--lambda`，三种独立方法交叉验证 |
 | 配置文件 / checkpoint | ✅ Phase 2 完成，重启逐位复现 |
 | 可视化 | ✅ `tools/fpd2vtk.py` 离线转 VTK（ParaView 开一个 .pvd） |
+| z 向壁面泊松求解器 | ✅ xy 2D FFT + z 向 Thomas，通过算子往返判据（未接线） |
 | 定量验证 | ❌ 未做 |
 
 ### 性能
@@ -99,6 +100,12 @@ $PV/bin/pvpython tools/fpd2vtk.py out/prod_*.fpd -o vis/
 **流体求解器为什么可信**：`src/Stokes.cpp` 的泊松解用的是 7 点差分格式的**精确离散本征值**
 `0.5/(cos kx + cos ky + cos kz - 3)`，而不是连续谱的 `-k²`，与第 3 阶段的有限差分离散严格自洽。
 `cufftPlan3d(Nz,Ny,Nx)` 与 `IDX(i,j,k)=i+j*Nx+k*Nx*Ny` 的搭配也已核对无误。
+
+z 向无滑移壁面的压力泊松求解器（`src/Poisson.{h,cpp}`，`wall_z=1`）已实现：xy 向
+批量 2D FFT + 逐 `(kx,ky)` 在 z 向解三对角（Thomas），并通过「手写 `div∘grad` 算子
+作用出右端 → 求解器还原」的往返判据（`./build/fpd_check --check-poisson`）。完整数学
+推导见 **`doc/PressurePoisson.md`**；其中 Neumann 边界是从「壁面法向面不修正」导出的
+结论，不是假设。该求解器尚未接线到 `Stokes.cpp`（Phase 7-B）。
 
 ## 缺陷清单（历史记录）
 
