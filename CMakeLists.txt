@@ -33,6 +33,7 @@ add_library(fpd_core STATIC
     src/Config.cpp
     src/IOBin.cpp
     src/State.cpp
+    src/Potential.cpp
 )
 target_link_libraries(fpd_core PUBLIC CUDA::cudart CUDA::curand CUDA::cufft)
 
@@ -45,6 +46,7 @@ add_executable(fpd_check
     src/CheckMain.cpp
     src/CheckStencil.cpp
     src/CheckNoise.cpp
+    src/CheckPotential.cpp
 )
 target_link_libraries(fpd_check PRIVATE fpd_core)
 

@@ -24,4 +24,7 @@ enum EquipartMode { EQ_GHOST, EQ_FROZEN, EQ_MOVING };
 int run_equipartition_check(EquipartMode mode, int L, double dt, double kT,
                             long n_steps, unsigned long long seed);
 
+// 势函数自检（纯 CPU，无卡可跑）：力=-dU/dr、黄金表、最小镜像、N=3、特征点
+int run_potential_check();
+
 #endif

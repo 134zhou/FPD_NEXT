@@ -37,6 +37,12 @@ int main(int argc, char** argv)
         return fails;
     }
 
+    // 势函数自检：纯 CPU，无卡可跑
+    if (argc > 1 && std::strcmp(argv[1], "--check-potential") == 0)
+    {
+        return run_potential_check();
+    }
+
     // 常量表：--lambda [L]   （纯 CPU，秒级）
     if (argc > 1 && std::strcmp(argv[1], "--lambda") == 0)
     {
@@ -84,6 +90,7 @@ int main(int argc, char** argv)
     }
 
     std::cerr << "用法: fpd_check --check\n"
+              << "      fpd_check --check-potential\n"
               << "      fpd_check --lambda [L]\n"
               << "      fpd_check --noise [L] [dt] [kT] [steps]\n"
               << "      fpd_check --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]\n";
