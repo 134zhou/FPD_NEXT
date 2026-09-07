@@ -17,6 +17,7 @@
 #include "./include/Config.h"
 #include "./include/IOBin.h"
 #include "./include/State.h"
+#include "./include/Potential.h"
 #include "./include/Velocity.h"
 
 // ============================================================================
@@ -105,6 +106,27 @@ static int run_production(const FpdConfig& c)
     // st.init 在 load 之前 copyin 了初始 0；现在主机端有 load/默认 的值，推上去
     st.upload(ST_PARTICLE | ST_VELOCITY);
 
+    // 粒子间势与外场
+    const PotentialParams pot = make_potential_params(c);
+    const ExternalField  ext = make_external_field(c);
+
+    // 背景力密度补偿：外场均匀时 Σ_n F = N·g ≠ 0，流体 k=0 被线性加速、整盒漂移。
+    // bg = −ΣF/size 抵消它。壁面 Phase 上线后（有真实动量汇）此开关默认转 0。
+    const double bgx = c.gravity_compensate ? -(ext.gx * (double)N) / (double)size : 0.0;
+    const double bgy = c.gravity_compensate ? -(ext.gy * (double)N) / (double)size : 0.0;
+    const double bgz = c.gravity_compensate ? -(ext.gz * (double)N) / (double)size : 0.0;
+
+    if (c.potential != "none")
+    {
+        std::cout << "势: " << c.potential << "   shift=" << c.pot_shift
+                  << "   rcut=" << pot.rcut << std::endl;
+    }
+    if (ext.gx != 0.0 || ext.gy != 0.0 || ext.gz != 0.0)
+    {
+        std::cout << "外场: (" << ext.gx << ", " << ext.gy << ", " << ext.gz << ")"
+                  << "   补偿=" << (c.gravity_compensate ? "on" : "off") << std::endl;
+    }
+
     std::cout << "开始模拟：" << cfg.Nx << "x" << cfg.Ny << "x" << cfg.Nz
               << "  N=" << N << "  dt=" << cfg.dt << "  kT=" << c.kT
               << "  W=" << cfg.W << "  a=" << pp.radius
@@ -144,6 +166,11 @@ static int run_production(const FpdConfig& c)
 
     for (long step = start_step; step < c.n_steps; step++)
     {
+        // 力：用当前 device 上的 R 算 F（GPU 全程 device，无 host 往返）。
+        // potential=none 且外场为零时 F 恒 0，与改动前数值路径逐位一致。
+        compute_particle_forces(cfg, pot, ext, N, st.Rx, st.Ry, st.Rz,
+                                st.Fx, st.Fy, st.Fz);
+
         if (step % c.interval_ckpt == 0)
         {
             // 拉全检查点需要的数组（含 Fx/Fy/Fz —— 原来漏过，力恒 0 时无害，
@@ -183,7 +210,8 @@ static int run_production(const FpdConfig& c)
                                 st.sum_phix, st.sum_phiy, st.sum_phiz,
                                 st.eta, st.etaXY, st.etaYZ, st.etaZX);
         update_force_field(cfg, pp, N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz,
-                           st.sum_phix, st.sum_phiy, st.sum_phiz, st.fx, st.fy, st.fz);
+                           st.sum_phix, st.sum_phiy, st.sum_phiz, bgx, bgy, bgz,
+                           st.fx, st.fy, st.fz);
         step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.fx, st.fy, st.fz,
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz, st.pi_nx, st.pi_ny, st.pi_nz,
@@ -199,6 +227,10 @@ static int run_production(const FpdConfig& c)
     // 终态检查点（目标步），失败路径已在上面落过盘
     if (rc == 0)
     {
+        // 循环里最后一次 update_particle_position 更新了 R，而 F 只在循环开头算。
+        // 补算一次，保证「文件里的 F 对应文件里的 R」。
+        compute_particle_forces(cfg, pot, ext, N, st.Rx, st.Ry, st.Rz,
+                                st.Fx, st.Fy, st.Fz);
         st.download(ST_VELOCITY | ST_PARTICLE);
         if (!writer.write(c.n_steps)) { rc = 2; }
     }

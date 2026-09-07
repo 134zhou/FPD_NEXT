@@ -5,13 +5,14 @@ void update_force_field(
     int N, const double* Rx, const double* Ry, const double* Rz,
     const double* Fx, const double* Fy, const double* Fz,
     const double* sum_phix, const double* sum_phiy, const double* sum_phiz,
+    double bgx, double bgy, double bgz,
     double* fx, double* fy, double* fz
 )
 {
     const int Nx = cfg.Nx, Ny = cfg.Ny, Nz = cfg.Nz;
     const int n3 = stencil_size(pp);
 
-    // --- 1. 清零 ---
+    // --- 1. 写背景值（bg=0 时即清零）---
     #pragma acc parallel loop collapse(3) present(fx, fy, fz)
     for (int i = 0; i < Nx; i++)
     {
@@ -20,7 +21,7 @@ void update_force_field(
             for (int k = 0; k < Nz; k++)
             {
                 int ijk = IDX(i, j, k);
-                fx[ijk] = 0.0; fy[ijk] = 0.0; fz[ijk] = 0.0;
+                fx[ijk] = bgx; fy[ijk] = bgy; fz[ijk] = bgz;
             }
         }
     }

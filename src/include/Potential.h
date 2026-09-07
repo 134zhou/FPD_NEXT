@@ -131,11 +131,18 @@ static inline double pair_force_over_r(PotentialParams pp, double r2)
 // 每个粒子独立算自己的力，牛三靠 g(r) 的对称性 + 全矩阵覆盖保证。
 //
 // 求和顺序在固定 N 与固定 gang/vector 配置下是确定的 —— 与 Viscosity.cpp:40 /
-// Velocity.cpp:21 算 sum_phi 和 V 是同一机制，逐位可复现（spike_pair_bench 已实测）。
+// Velocity.cpp:21 算 sum_phi 和 V 是同一机制（spike_pair_bench 已实测逐位可复现）。
 // ---------------------------------------------------------------------------
 void compute_particle_forces(NS_Config cfg, PotentialParams pot, ExternalField ext,
                              int N,
                              const double* Rx, const double* Ry, const double* Rz,
                              double* Fx, double* Fy, double* Fz);
+
+// CPU 参考实现：串行 i<j 半矩阵。与 GPU 版是两份独立实现（各自验证装配逻辑），
+// 供纯 CPU 判据（CheckPotential.cpp）与 fpd_tool 的 --verify-forces 使用。
+void compute_particle_forces_cpu(NS_Config cfg, PotentialParams pot, ExternalField ext,
+                                 int N,
+                                 const double* Rx, const double* Ry, const double* Rz,
+                                 double* Fx, double* Fy, double* Fz);
 
 #endif

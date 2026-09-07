@@ -66,3 +66,25 @@ void compute_particle_forces(NS_Config cfg, PotentialParams pot, ExternalField e
         Fz[i] = ext.gz + sz;
     }
 }
+
+void compute_particle_forces_cpu(NS_Config cfg, PotentialParams pot, ExternalField ext,
+                                 int N,
+                                 const double* Rx, const double* Ry, const double* Rz,
+                                 double* Fx, double* Fy, double* Fz)
+{
+    const double Lx = (double)cfg.Nx, Ly = (double)cfg.Ny, Lz = (double)cfg.Nz;
+
+    for (int n = 0; n < N; n++) { Fx[n] = ext.gx; Fy[n] = ext.gy; Fz[n] = ext.gz; }
+    for (int i = 0; i < N; i++)
+        for (int j = i + 1; j < N; j++)
+        {
+            const double dx = min_image(Rx[i] - Rx[j], Lx);
+            const double dy = min_image(Ry[i] - Ry[j], Ly);
+            const double dz = min_image(Rz[i] - Rz[j], Lz);
+            const double r2 = dx*dx + dy*dy + dz*dz;
+            const double g  = pair_force_over_r(pot, r2);
+            Fx[i] += g*dx;  Fx[j] -= g*dx;
+            Fy[i] += g*dy;  Fy[j] -= g*dy;
+            Fz[i] += g*dz;  Fz[j] -= g*dz;
+        }
+}

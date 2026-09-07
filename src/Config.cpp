@@ -380,6 +380,14 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
     ofs << "# 本次运行实际使用的配置（自动生成，可直接作为输入重跑）\n";
     for (size_t i = 0; i < tab.size(); i++)
     {
+        // 跳过当前 potential 用不到的势参数：dump 出「用不到」会让 config.used
+        // 重跑时 validate_config 报错（完整 dump vs 用不到报错的矛盾）。
+        const std::string k = tab[i].key;
+        if (is_pot_param(k) && k != "potential")
+        {
+            if (k == "pot_shift") { if (c.potential == "none") { continue; } }
+            else if (!potential_uses(c.potential, k)) { continue; }
+        }
         ofs << tab[i].key << " = ";
         switch (tab[i].type)
         {

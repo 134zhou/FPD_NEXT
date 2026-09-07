@@ -9,6 +9,7 @@
 #include "./include/Viscosity.h"
 #include "./include/Velocity.h"
 #include "./include/State.h"
+#include "./include/Potential.h"
 
 // ============================================================================
 // Phase 1 自检：力守恒 + 亚格点不变性
@@ -49,7 +50,8 @@ int run_force_conservation_check(NS_Config cfg, PhiParams pp)
                                 st.sum_phix, st.sum_phiy, st.sum_phiz,
                                 st.eta, st.etaXY, st.etaYZ, st.etaZX);
         update_force_field(cfg, pp, N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz,
-                           st.sum_phix, st.sum_phiy, st.sum_phiz, st.fx, st.fy, st.fz);
+                           st.sum_phix, st.sum_phiy, st.sum_phiz, 0.0, 0.0, 0.0,
+                           st.fx, st.fy, st.fz);
 
         st.download(ST_PHI | ST_PARTICLE);
 
@@ -148,7 +150,8 @@ int run_overlap_check(NS_Config cfg, PhiParams pp)
                                 st.sum_phix, st.sum_phiy, st.sum_phiz,
                                 st.eta, st.etaXY, st.etaYZ, st.etaZX);
         update_force_field(cfg, pp, N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz,
-                           st.sum_phix, st.sum_phiy, st.sum_phiz, st.fx, st.fy, st.fz);
+                           st.sum_phix, st.sum_phiy, st.sum_phiz, 0.0, 0.0, 0.0,
+                           st.fx, st.fy, st.fz);
         update_particle_velocity(cfg, pp, N, st.Rx, st.Ry, st.Rz,
                                  st.sum_phix, st.sum_phiy, st.sum_phiz,
                                  st.vx, st.vy, st.vz, st.Vx, st.Vy, st.Vz);
@@ -191,6 +194,111 @@ int run_overlap_check(NS_Config cfg, PhiParams pp)
 
     st.finish();
 
+    std::cout << (failures == 0 ? "全部通过\n" : "有失败项\n");
+    return failures;
+}
+
+// ============================================================================
+// J5 端到端力链路 + GPU 力确定性
+//
+// 测的是「compute_particle_forces 的 GPU F 正确且确定 + 被 update_force_field
+// 正确投影」。三条判据：
+//   (a) GPU 全矩阵 vs CPU 半矩阵（两份独立实现）对照 —— 力的正确性
+//   (b) GPU 版同一构型算两次逐位 —— reduction 确定性（J8 的核心目标）
+//   (c) 力投影守恒 Σf == ΣF（bg=0），以及 bg 补偿后 Σf == 0（发现 1 的补偿逻辑）
+// ============================================================================
+int run_force_pipeline_check(NS_Config cfg, PhiParams pp)
+{
+    const int size = cfg.Nx * cfg.Ny * cfg.Nz;
+    const int N = 4;
+
+    PotentialParams pot = make_potential_params(POT_LJ126, SHIFT_ENERGY,
+                                                57.1428571429, 7.4, 0, 0, 0, 15.0);
+    ExternalField ext{1.0, -2.0, 3.0};
+
+    FpdState st;
+    st.init(cfg, N, ST_STENCIL, 0);
+
+    // 构型：4 个粒子，间距 < rcut=15（有力）
+    st.Rx[0]=64; st.Ry[0]=32; st.Rz[0]=16;
+    st.Rx[1]=74; st.Ry[1]=32; st.Rz[1]=16;    // 与 0 间距 10
+    st.Rx[2]=64; st.Ry[2]=42; st.Rz[2]=16;    // 与 0 间距 10
+    st.Rx[3]=69; st.Ry[3]=37; st.Rz[3]=16;    // 与 0 间距 √50
+    st.upload(ST_PARTICLE);
+
+    int failures = 0;
+    std::cout << "=== J5 端到端力链路 + GPU 力确定性 ===\n";
+    std::cout << std::scientific << std::setprecision(3);
+
+    // (a)+(b) GPU 算两次逐位 + 与 CPU 参考对照
+    compute_particle_forces(cfg, pot, ext, N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz);
+    st.download(ST_PARTICLE);
+    double g0x[N], g0y[N], g0z[N];
+    for (int n = 0; n < N; n++) { g0x[n] = st.Fx[n]; g0y[n] = st.Fy[n]; g0z[n] = st.Fz[n]; }
+
+    compute_particle_forces(cfg, pot, ext, N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz);
+    st.download(ST_PARTICLE);
+    bool bitwise = true;
+    for (int n = 0; n < N && bitwise; n++)
+    {
+        if (st.Fx[n] != g0x[n] || st.Fy[n] != g0y[n] || st.Fz[n] != g0z[n]) { bitwise = false; }
+    }
+
+    double cFx[N], cFy[N], cFz[N];
+    compute_particle_forces_cpu(cfg, pot, ext, N, st.Rx, st.Ry, st.Rz, cFx, cFy, cFz);
+    double fmax = 0.0, relmax = 0.0;
+    for (int n = 0; n < N; n++)
+    {
+        fmax = std::fmax(fmax, std::fabs(st.Fx[n]));
+        fmax = std::fmax(fmax, std::fabs(st.Fy[n]));
+        fmax = std::fmax(fmax, std::fabs(st.Fz[n]));
+        relmax = std::fmax(relmax, std::fabs(st.Fx[n] - cFx[n]));
+        relmax = std::fmax(relmax, std::fabs(st.Fy[n] - cFy[n]));
+        relmax = std::fmax(relmax, std::fabs(st.Fz[n] - cFz[n]));
+    }
+    relmax = fmax > 0.0 ? relmax / fmax : 0.0;
+
+    const bool a_ok = relmax < 1e-12;
+    if (!a_ok) { failures++; }
+    if (!bitwise) { failures++; }
+    std::cout << "  GPU vs CPU 对照   max 相对差 = " << relmax
+              << "   " << (a_ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "  GPU 算两次逐位   " << (bitwise ? "PASS" : "FAIL") << "\n";
+
+    // (c) 力投影守恒：Σf == ΣF（bg=0）
+    update_viscosity_fields(cfg, pp, N, st.Rx, st.Ry, st.Rz,
+                            st.sum_phix, st.sum_phiy, st.sum_phiz,
+                            st.eta, st.etaXY, st.etaYZ, st.etaZX);
+    update_force_field(cfg, pp, N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz,
+                       st.sum_phix, st.sum_phiy, st.sum_phiz, 0.0, 0.0, 0.0,
+                       st.fx, st.fy, st.fz);
+    st.download(ST_PHI | ST_PARTICLE);
+    double sx = 0, sy = 0, sz = 0, sumFx = 0, sumFy = 0, sumFz = 0;
+    for (int i = 0; i < size; i++) { sx += st.fx[i]; sy += st.fy[i]; sz += st.fz[i]; }
+    for (int n = 0; n < N; n++) { sumFx += st.Fx[n]; sumFy += st.Fy[n]; sumFz += st.Fz[n]; }
+    const double e1 = std::fmax(std::fabs(sx - sumFx), std::fmax(std::fabs(sy - sumFy), std::fabs(sz - sumFz)));
+    const bool c0_ok = e1 < 1e-12;
+    if (!c0_ok) { failures++; }
+    std::cout << "  力守恒 Σf == ΣF  (bg=0)   |err| = " << e1
+              << "   " << (c0_ok ? "PASS" : "FAIL") << "\n";
+
+    // (c') bg 补偿后 Σf == 0
+    const double bgx = -sumFx / (double)size;
+    const double bgy = -sumFy / (double)size;
+    const double bgz = -sumFz / (double)size;
+    update_force_field(cfg, pp, N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz,
+                       st.sum_phix, st.sum_phiy, st.sum_phiz, bgx, bgy, bgz,
+                       st.fx, st.fy, st.fz);
+    st.download(ST_PHI);
+    sx = 0; sy = 0; sz = 0;
+    for (int i = 0; i < size; i++) { sx += st.fx[i]; sy += st.fy[i]; sz += st.fz[i]; }
+    const double e2 = std::fmax(std::fabs(sx), std::fmax(std::fabs(sy), std::fabs(sz)));
+    const bool cc_ok = e2 < 1e-12;
+    if (!cc_ok) { failures++; }
+    std::cout << "  力守恒 Σf == 0  (bg 补偿)  |err| = " << e2
+              << "   " << (cc_ok ? "PASS" : "FAIL") << "\n";
+
+    st.finish();
     std::cout << (failures == 0 ? "全部通过\n" : "有失败项\n");
     return failures;
 }

@@ -2,6 +2,7 @@
 //
 //   fpd_tool --dump-ckpt <file> [--at i j k]
 //   fpd_tool --diff-ckpt <a> <b>
+//   fpd_tool --verify-forces <ckpt> <config.used>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -10,12 +11,15 @@
 #include <vector>
 
 #include "./include/IOBin.h"
+#include "./include/Config.h"
+#include "./include/Potential.h"
 
 static void usage()
 {
     printf("用法:\n");
     printf("  fpd_tool --dump-ckpt <file> [--at i j k]   打印头部；--at 打印指定格点的 v\n");
     printf("  fpd_tool --diff-ckpt <a> <b>              逐位比较两个检查点\n");
+    printf("  fpd_tool --verify-forces <ckpt> <config>  用配置重算粒子力，与文件里的 F 对照\n");
 }
 
 // 按 header 分配好数组的持有者
@@ -178,6 +182,57 @@ static int cmd_diff(const char* pa, const char* pb)
     return nbad == 0 ? 0 : 1;
 }
 
+// J7：检查点自洽性。读 .fpd 里的 R，用配置里的势参数重算 F，与文件里的 F 对照。
+// 势参数不进 .fpd header（见 PROGRESS.md 决策记录），这条判据把「不自描述」的代价
+// 从静默变成可检测 —— 配错势参数会在这里 FAIL。
+static int cmd_verify_forces(const char* ckpt_path, const char* cfg_path)
+{
+    std::string err;
+
+    CkptHeader h;
+    if (!read_ckpt_header(ckpt_path, h, err))
+    { fprintf(stderr, "错误: %s\n", err.c_str()); return 1; }
+
+    Holder holder;
+    holder.alloc(h);
+    if (!load_checkpoint(ckpt_path, h, holder.a, err))
+    { fprintf(stderr, "错误: %s\n", err.c_str()); return 1; }
+
+    FpdConfig fc;
+    if (!load_config(cfg_path, fc, err))
+    { fprintf(stderr, "错误: %s\n", err.c_str()); return 1; }
+
+    NS_Config cfg = make_ns_config(fc);
+    PotentialParams pot = make_potential_params(fc);
+    ExternalField ext = make_external_field(fc);
+
+    std::vector<double> Fx(h.N), Fy(h.N), Fz(h.N);
+    compute_particle_forces_cpu(cfg, pot, ext, h.N,
+                                holder.Rx.data(), holder.Ry.data(), holder.Rz.data(),
+                                Fx.data(), Fy.data(), Fz.data());
+
+    // 对比（容差：文件里的 F 是 GPU 全矩阵算的，这里是 CPU 串行 i<j，浮点顺序不同，
+    // 差 ~1e-15 相对；配错参数会差 O(1)）
+    double maxabs = 0.0, fmag = 0.0;
+    for (int n = 0; n < h.N; n++)
+    {
+        double d1 = fabs(Fx[n] - holder.Fx[n]);
+        double d2 = fabs(Fy[n] - holder.Fy[n]);
+        double d3 = fabs(Fz[n] - holder.Fz[n]);
+        maxabs = fmax(maxabs, fmax(d1, fmax(d2, d3)));
+        fmag = fmax(fmag, fmax(fabs(holder.Fx[n]), fmax(fabs(holder.Fy[n]), fabs(holder.Fz[n]))));
+    }
+    const double tol = 1e-10 * (fmag > 0.0 ? fmag : 1.0);
+    const bool ok = maxabs < tol;
+
+    printf("=== verify-forces %s ===\n", ckpt_path);
+    printf("  势 = %s  外场 = (%g, %g, %g)   N = %d\n",
+           fc.potential.c_str(), ext.gx, ext.gy, ext.gz, h.N);
+    printf("  重算 F vs 文件 F: max |ΔF| = %.3e   阈值 %.3e   %s\n",
+           maxabs, tol, ok ? "PASS" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char** argv)
 {
     if (argc < 3) { usage(); return 2; }
@@ -187,6 +242,11 @@ int main(int argc, char** argv)
     {
         if (argc < 4) { usage(); return 2; }
         return cmd_diff(argv[2], argv[3]);
+    }
+    if (strcmp(argv[1], "--verify-forces") == 0)
+    {
+        if (argc < 4) { usage(); return 2; }
+        return cmd_verify_forces(argv[2], argv[3]);
     }
     usage();
     return 2;

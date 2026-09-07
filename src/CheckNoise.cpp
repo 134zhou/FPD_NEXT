@@ -69,7 +69,8 @@ int run_noise_check(int L, double dt, double kT, long n_steps)
                                 st.sum_phix, st.sum_phiy, st.sum_phiz,
                                 st.eta, st.etaXY, st.etaYZ, st.etaZX);
         update_force_field(cfg, pp, N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz,
-                           st.sum_phix, st.sum_phiy, st.sum_phiz, st.fx, st.fy, st.fz);
+                           st.sum_phix, st.sum_phiy, st.sum_phiz, 0.0, 0.0, 0.0,
+                           st.fx, st.fy, st.fz);
         step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.fx, st.fy, st.fz,
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz, st.pi_nx, st.pi_ny, st.pi_nz,
@@ -193,7 +194,8 @@ int run_equipartition_check(EquipartMode mode, int L, double dt, double kT,
                                 st.sum_phix, st.sum_phiy, st.sum_phiz,
                                 st.eta, st.etaXY, st.etaYZ, st.etaZX);
         update_force_field(cfg, pp, N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz,
-                           st.sum_phix, st.sum_phiy, st.sum_phiz, st.fx, st.fy, st.fz);
+                           st.sum_phix, st.sum_phiy, st.sum_phiz, 0.0, 0.0, 0.0,
+                           st.fx, st.fy, st.fz);
         step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.fx, st.fy, st.fz,
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz, st.pi_nx, st.pi_ny, st.pi_nz,

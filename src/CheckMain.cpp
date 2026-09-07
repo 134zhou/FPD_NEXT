@@ -34,6 +34,8 @@ int main(int argc, char** argv)
         int fails = run_force_conservation_check(cfg, pp);
         std::cout << "\n";
         fails += run_overlap_check(cfg, pp);
+        std::cout << "\n";
+        fails += run_force_pipeline_check(cfg, pp);
         return fails;
     }
 
