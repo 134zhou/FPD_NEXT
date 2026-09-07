@@ -32,12 +32,21 @@ add_library(fpd_core STATIC
     src/Analysis.cpp
     src/Config.cpp
     src/IOBin.cpp
+    src/State.cpp
 )
 target_link_libraries(fpd_core PUBLIC CUDA::cudart CUDA::curand CUDA::cufft)
 
 # 6. 模拟主程序
 add_executable(fpd src/main.cpp)
 target_link_libraries(fpd PRIVATE fpd_core)
+
+# 6b. 自检与验证程序（从 fpd 拆出；与 fpd 共用 fpd_core，走同一条物理代码路径）
+add_executable(fpd_check
+    src/CheckMain.cpp
+    src/CheckStencil.cpp
+    src/CheckNoise.cpp
+)
+target_link_libraries(fpd_check PRIVATE fpd_core)
 
 # 7. 纯 CPU 的检查工具（不需要 GPU，可在无卡机器上跑）
 add_executable(fpd_tool src/tool_main.cpp)

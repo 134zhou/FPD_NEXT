@@ -1,0 +1,50 @@
+# S0 spike 结论归档（2026-09-07）
+
+Phase 5 前置的三个 spike，结论如下。详细决策记录见 PROGRESS.md。
+
+## spike_state_map：FpdState 的映射机制（R1 已排除）
+
+结论：**三种方式全部可行**，首选运行时 API。
+
+- 运行时 API（acc_copyin/acc_create/acc_update_self/acc_delete）建的映射，
+  【另一个 TU】里的 present() 子句完全认账（out == 2*p 逐位）
+- 成员函数里的 #pragma acc enter data / update host 也工作 ——
+  推翻了「成员函数和 lambda 一样会挂」的担忧（CLAUDE.md 只记录过 lambda 会挂）
+- 自由函数 + 指针参数上的 pragma 也工作（退路）
+- acc_create 引用计数对称，acc_is_present 可支撑 require()
+
+**决策：FpdState 用运行时 API**（显式、可查询、零编译期解析风险），
+成员函数 pragma 作为等价退路。
+
+## spike_pair_bench：力算 CPU 还是 GPU（R2 已排除，决策被推翻）
+
+盒子 128x64x32，Morse(De=50, alpha=1, r_eq=7.4, rcut=15)，实测：
+
+| N | CPU 计算 | GPU 计算 | 传输往返 | 方案A占6.5ms/步 | 方案B占6.5ms/步 |
+|---|---|---|---|---|---|
+| 363 | 2695.4 us | 129.4 us | 19.2 us | 41.76% | 1.99% |
+| 1000 | 4403.4 us | 710.3 us | 22.9 us | 68.10% | 10.93% |
+| 4000 | 72536.6 us | 10017.3 us | 39.5 us | 1116.55% | 154.11% |
+
+- 两版结果相对差 ~1e-16
+- **GPU 版重复 10 次逐位可复现**
+
+**决策：选 GPU 方案 B（gang-over-i + vector-reduction-over-j 全矩阵，零 atomic）。**
+这是本项目第四次「实测推翻了计划里的假设」—— PROGRESS.md 原决策「CPU 侧算」
+的论据两处都错：(1) 漏算 O(N²) 计算本身（实测 2.7ms，是传输的 140 倍，不是
+决策里以为的「传输主导 20-40µs」）；(2)「CPU 才能逐位重启」不成立（GPU reduction
+与 Viscosity/Velocity 的 sum_phi/V 同机制，且实测逐位可复现）。
+
+cell list 迁移阈值相应抬高：GPU 方案下 N=1000 仍只占 11%，N=4000 才 154%
+（且那时 NS 求解也更贵）。原「N > 2e4」的阈值不再适用，具体以 N 标度实测为准。
+
+## spike_potential_ref：黄金表（J2 判据的黄金值）
+
+产出 spike/potential_golden.txt，三套参数：
+
+- wca:  eps=1, sigma=7.4, rcut=2^(1/6)*sigma=8.30621915748936
+- lj126: eps=57.1428571429, sigma=7.4, rcut=15
+- morse: De=50, alpha=1, r_eq=7.4, rcut=15
+
+锚点核对：morse 在 r=r_eq=7.4 处 g=0；lj126 在 r=8 处 |F|=27.15 排斥；
+morse 在 r=8 处 g=-3.095 吸引（|F|=24.76）；三种势在各自 rcut 处能量与力都连续。
