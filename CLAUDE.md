@@ -12,10 +12,11 @@ cmake -B build && cmake --build build -j     # nvc++ 26.3 + CUDA 13.1 + CMake 4.
                                               # 产出 build/fpd（模拟）与 build/fpd_tool（纯 CPU 工具）
 
 ./build/fpd config/smoke.cfg [--set k=v ...]  # 生产运行；--set 覆盖配置项
-./build/fpd --check                           # 自检：力守恒 / 亚格点不变 / 混叠 / N=2 重叠
-./build/fpd --lambda [L]                      # 常量表 λ^T, M_i（纯 CPU，秒级）
-./build/fpd --noise [L] [dt] [kT] [steps]     # 测试 3A：纯流体噪声谱
-./build/fpd --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]   # 测试 3B
+./build/fpd_check --check                     # 自检：力守恒 / 亚格点 / 混叠 / N=2 重叠 / 力链路
+./build/fpd_check --check-potential           # 势函数自检（纯 CPU，无卡可跑）
+./build/fpd_check --lambda [L]                # 常量表 λ^T, M_i（纯 CPU，秒级）
+./build/fpd_check --noise [L] [dt] [kT] [steps]   # 测试 3A：纯流体噪声谱
+./build/fpd_check --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]   # 测试 3B
 
 ./build/fpd_tool --dump-ckpt <f> [--at i j k] # 看 .fpd 头部 / 指定格点的值
 ./build/fpd_tool --diff-ckpt <a> <b>          # 逐位比较两个检查点
@@ -83,8 +84,9 @@ Phase 4 的 L=192 立方盒是 27 倍网格量。检查点写入 3.9 ms/次，�
 
 ### 2. 改完必须重跑 `--check`
 
-动过 `Stencil.h` / `Viscosity.cpp` / `Force.cpp` / `Velocity.cpp` 之后**必须**跑
-`./build/fpd --check`，全绿才算数。`stencil_point` 是单点故障，它错了三个模块一起错。
+动过 `Stencil.h` / `Viscosity.cpp` / `Force.cpp` / `Velocity.cpp` / `Potential.h`
+之后**必须**跑 `./build/fpd_check --check`，全绿才算数。`stencil_point` 是单点故障，
+它错了三个模块一起错。
 
 ### 2b. 随机数流按 step 定位，**不要改成累计记账**
 
@@ -115,6 +117,25 @@ Phase 4 的 L=192 立方盒是 27 倍网格量。检查点写入 3.9 ms/次，�
 `doc/old_code/` 仅供参考。已确认它在四处是错的或有瑕疵（cellList 的 `nnIndex[12]`、
 cell 数不足 3、z 向边界 hack、重力硬编码），详见 `README.md`。
 「和旧代码对齐」只能作定性 sanity check，**定量真值来自文献公式和自洽性测试**。
+
+### 5. 粒子间力的求和顺序必须确定（逐位重启的生命线）
+
+`Potential.cpp` 的 `compute_particle_forces` 是 GPU 全矩阵（gang-over-i +
+vector-reduction-over-j，零 atomic），求和顺序在固定 N 与固定 gang/vector 配置下是
+确定的 —— 与 `Viscosity.cpp` 算 `sum_phi`、`Velocity.cpp` 算 `V` 是同一机制
+（`spike_pair_bench` 已实测逐位可复现）。
+
+**但 FPD 的逐位重启只在粒子支撑域不重叠时成立**（间距 > 2·range = 16.8）。
+重叠时 `eta[ijk] += d_eta*w` 的 atomic 累加顺序跨进程不确定（~1e-16 差异），
+这是 Viscosity.cpp 的既有行为，不是粒子间力引入的。而「粒子间力」需要粒子靠近
+（间距 < potential rcut ≤ 15），靠近必然重叠 —— 所以「有力 + 逐位重启」在当前盒子下
+**原理上不可兼得**。逐位重启的常驻回归用 `smoke.cfg`（N=1 或 N=2 不重叠）。
+
+### 6. 粒子间力的 CPU/GPU 对照是判据，不是生产代码
+
+`compute_particle_forces_cpu`（串行 i<j 半矩阵）只用于判据对照（`--check-potential`
+的 N=3、`--check` 的 J5、`fpd_tool --verify-forces`），生产热路径走 GPU 版。
+两份实现必须独立维护（不互调），否则「GPU vs CPU 对照」判据退化成自洽的、盲的。
 
 ## 代码约定
 
@@ -152,19 +173,45 @@ cell 数不足 3、z 向边界 hack、重力硬编码），详见 `README.md`。
 - **`Σφ_α²` 三方向一致性是交错混叠的判据**（`Σφ_α` 只是 k=0 分量）。已并入 `--check`
 - **平衡时间**：最慢模式 `τ = (L/2π)²/ν`。做平衡态统计时盒子越大越慢，
   纯流体测试务必用小立方盒（L=128 要 41 万步，L=32 只要 2.6 万步）
-- **λ^T、M_i 等常量必须用与模拟相同的离散求和**（`./build/fpd --lambda`）。
+- **λ^T、M_i 等常量必须用与模拟相同的离散求和**（`./build/fpd_check --lambda`）。
   理由是**自洽性**，不是格点不准 —— 格点其实精确到 5e-6。
   但**绝不能用解析球体 `(4/3)πa³`**：真值比它大 24.1%，那是扩散界面的曲率项
   （`+8πaξ²π²/24`），误用会让 `M_i` 差 24%，直接毁掉验证
+- **势截断半径必须 `rcut < min(Nx,Ny,Nz)/2`**（严格小于，等号会双重计数周期镜像）。
+  旧代码用 `cutoff = 3·Re = 22.2` 在它自己的 128×128×64 里合法，但**照搬到
+  `production.cfg` 的 128×64×32（min/2=16）就违反**。`validate_config` 已硬性拦截。
+  势残余力比 `|U'(rcut)|/max|U'| > 1e-6`（峰值取物理可达区 `[2a, rcut]`）会报警
+
+## 粒子间势与外场
+
+势函数在 `src/include/Potential.h`（enum + POD + `routine seq` 的 switch，无函数指针）。
+支持 `none / wca / morse / lj126`；配置项 `potential` + `pot_eps/pot_sigma/pot_De/
+pot_alpha/pot_r_eq/pot_rcut/pot_shift`。
+
+- **WCA 不是独立分支**：WCA ≡ LJ12-6 + `rcut = 2^{1/6}σ`（派生）+ 移位，
+  且此时能量移位与力移位恒等（U'(rc)=0）。switch 只有 3 个真实分支。
+- **默认 `shift=energy`**（U 移位保证 U(rc)=0，力不变）。`force` 会改阱深
+  （Morse α=1, rcut=15 时 50→49.57），只在残余力比不可接受时用。
+- **参数查表**：`validate_config` 检查「用不到的势参数报错、需要的必须给」，不给默认值
+  兜底；启动时打印势的完整解释（含残余力比）。Morse 宽度参数叫 `pot_alpha` 不叫 `a`
+  （`a` 是粒子半径，README.md:21 的相场公式里就是）。
+- **外场** `gravity_x/y/z`（每粒子恒力）+ `gravity_compensate`（默认 1）：外场均匀时
+  Σ_n F = N·g ≠ 0，流体 k=0 被线性加速、整盒漂移，`bg = −ΣF/size` 抵消它。
+  **z 向无滑移壁面（Phase 7）上线后此开关默认转 0**（壁面提供真实动量汇）。
+
+`pair_energy_bare` 与 `pair_force_over_r_bare` 是**两份独立实现**（势 vs 解析导数），
+`--check-potential` 用四阶数值微分 + Python 黄金表交叉检验；`min_image` 在
+`Potential.h` 里是唯一真值源。势参数**不进 `.fpd` header**（Python 侧用不到），
+自洽性由 `fpd_tool --verify-forces` 判据兜底。
 
 ## 当前进度（详见 `PROGRESS.md`）
 
-Phase 0/1/2/3 完成。流体求解器、交错网格封装、噪声标定（流体侧 3A + 粒子侧 3B）、
-配置系统与逐位断点重启均已通过数值判据。**粒子间相互作用力尚未实现（`F[n]` 恒为 0）。**
+Phase 0/1/2/3/5 完成。流体求解器、交错网格封装、噪声标定（3A + 3B）、配置系统、
+逐位断点重启、**粒子间相互作用力（WCA/Morse/LJ126 + 外场）**均已通过数值判据。
+`FpdState` 已实现（Phase 2 遗留销掉），自检拆成独立可执行 `fpd_check`。
 
-下一步是 Phase 4（Stokes 阻力 + VAF/MSD），无阻塞项。
-唯一的 Phase 2 遗留是 **`FpdState` 未做** —— 四个自检路径各自复制了一份
-分配-映射-释放样板，是下一个 C1/C2 式漂移的温床，但不阻塞 Phase 4。
+下一步是 Phase 4（Stokes 阻力 + VAF/MSD），无阻塞项。Phase 7（z 向无滑移壁面）
+已按用户要求立项 —— 壁面提供真实动量汇，重力沉降才不整盒漂移。
 
 ## 工作方式
 

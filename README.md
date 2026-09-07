@@ -71,7 +71,7 @@ $PV/bin/pvpython tools/fpd2vtk.py out/prod_*.fpd -o vis/
 | 交错网格封装 `Stencil.h` | ✅ Phase 1 完成 |
 | 相场 / 粘度场构造 | ✅ C1/C3/C7/C8 已修 |
 | 力投影 / 粒子速度 | ✅ C1/C2/C4/C5 已修 |
-| 粒子间相互作用力 | ❌ 未实现（`F[n]` 恒为 0） |
+| 粒子间相互作用力 | ✅ WCA / Morse / LJ12-6 + 三分量外场 |
 | 多粒子 / 初始构型 | ✅ `tools/make_init.py` 生成 `.fpd` |
 | 热噪声按 kT 标定 | ✅ 流体侧（3A）+ 粒子侧（3B）均已验证 |
 | λ^T / M_i 常量表 | ✅ `--lambda`，三种独立方法交叉验证 |
@@ -148,6 +148,9 @@ C1-C5、C7-C9、C11 在 Phase 1，C6（噪声标定）在测试 3A/3B，C10 由 
   且与全周期 FFT 求解器不自洽
 - `doc/old_code/main.cpp:475` —— 重力硬编码 `-10`，命令行 `argv[5]` 读了不用
 - `savePositions3D_FPD` 与 `readPositions3D_FPD` 的 header 字段顺序不一致
+- **势截断照搬会违反最小镜像**：旧代码 `cutoff = 3·Re = 22.2` 在它自己的 128×128×64
+  盒子里合法（min/2 = 32），但照搬到 `production.cfg` 的 128×64×32（min/2 = 16）就
+  违反。`validate_config` 已硬性拦截（报错而非警告），不会静默给错力。
 
 ## 设计约定
 
@@ -167,10 +170,51 @@ C1-C5、C7-C9、C11 在 Phase 1，C6（噪声标定）在测试 3A/3B，C10 由 
 > 而"力守恒 `Σfx == Fx[n]`"这个判据对它的内部公式错误是**盲的**（投影和归一化会一起错）。
 > 所以必须同时有独立的数值对照，见 `spike/`。
 
+## 粒子间势与外场
+
+`src/include/Potential.h`，enum + POD + `routine seq` 的 switch，支持
+`none / wca / morse / lj126`。配置项 `potential` + `pot_eps/pot_sigma/pot_De/
+pot_alpha/pot_r_eq/pot_rcut/pot_shift`。
+
+```
+# 势（每粒子间）
+potential = morse          # none | wca | morse | lj126
+pot_De = 50  pot_alpha = 1  pot_r_eq = 7.4  pot_rcut = 15  pot_shift = energy
+# 外场（每粒子恒力）
+gravity_z = -10  gravity_compensate = 1
+```
+
+- **WCA ≡ LJ12-6 + `rcut = 2^{1/6}σ`（派生）+ 移位**，不是独立分支；能量移位与力移位
+  在 WCA 下恒等（U'(rc)=0）。switch 只有 3 个真实分支，消除了旧代码
+  `cul_WCA`/`cul_LJ6` 两份复制粘贴的漂移温床。
+- **`shift=energy` 为默认**（U 移位保证 U(rc)=0，力不变）；`force` 会让阱深改变
+  （Morse α=1, rcut=15 时 50→49.57），只在残余力比不可接受时用。
+- **参数查表**：`validate_config` 检查「用不到的势参数报错、需要的必须给」，不给默认值
+  兜底。Morse 宽度参数叫 `pot_alpha` 不叫 `a`（`a` 是粒子半径）。
+- **外场**：均匀外场下 `Σ_n F = N·g ≠ 0`，流体 k=0 被线性加速、整盒漂移，
+  `gravity_compensate`（默认 1）叠加背景力密度 `bg = −ΣF/size` 抵消它。
+  **z 向无滑移壁面（Phase 7）上线后此开关默认转 0**。
+- **势参数不进 `.fpd` header**（Python 侧用不到）；自洽性由
+  `fpd_tool --verify-forces <ckpt> <config.used>` 判据兜底。
+
+### 数值判据（`--check-potential`，纯 CPU）
+
+```
+J1 力=-dU/dr 四阶差分（pair_energy 与 pair_force 两份独立实现交叉检验）
+J2 Python 黄金表对照（spike/spike_potential_ref.py，独立实现，非自洽）
+J3 最小镜像 vs 5 镜像暴力枚举
+J4 N=3 等边三角形解析对照（抓双计数/漏算/符号错，N=2 盲的）
+J6 势特征点 + POT_NONE 零判据 + 标号交换对称性
+```
+
+这些判据抓到过一个真实 bug：`s6 = s6*s6*s6` 算成 (σ/r)³ 而非 (σ/r)⁶，力差 200 倍
+—— 数值微分 + 黄金表是公式抄错的判决性判据，不是「看起来对」。
+
 ## 自检
 
 ```bash
-./build/fpd --check     # 力守恒 + 亚格点不变性 + 多粒子重叠
+./build/fpd_check --check     # 力守恒 + 亚格点不变性 + 多粒子重叠 + 力链路
+./build/fpd_check --check-potential   # 势函数自检（纯 CPU，无卡可跑）
 ```
 
 **每次改动 `Stencil.h` / `Viscosity` / `Force` / `Velocity` 后都必须重跑**，
@@ -200,7 +244,7 @@ eta_max 分离 49.85 ≈ 50（C3 修复前是 ~50.85）；重叠 90.5
 ## 噪声标定（测试 3A，已完成）
 
 ```bash
-./build/fpd --noise [L] [dt] [kT] [steps]      # 默认 32 0.01 1.0 200000
+./build/fpd_check --noise [L] [dt] [kT] [steps]      # 默认 32 0.01 1.0 200000
 ```
 
 无粒子的纯流体（η ≡ 1），检验能量均分 `⟨|v|²⟩ = 2kT/(ρ·dV) = 2kT`。
@@ -239,8 +283,8 @@ eta_max 分离 49.85 ≈ 50（C3 修复前是 ~50.85）；重叠 90.5
 ## 常量表与粒子能量均分（测试 3B，已完成）
 
 ```bash
-./build/fpd --lambda                                    # 常量表，秒级，无需 GPU
-./build/fpd --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]
+./build/fpd_check --lambda                              # 常量表，秒级，无需 GPU
+./build/fpd_check --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]
 ```
 
 ### 常量表

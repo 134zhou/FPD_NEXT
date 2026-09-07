@@ -1,25 +1,27 @@
 # 进度记录
 
-最后更新：2026-09-05（Phase 2 完成）
+最后更新：2026-09-07（Phase 5 完成）
 
 ## 一句话状态
 
-流体求解器、交错网格封装、噪声标定（流体侧+粒子侧）均已验证；
-**配置系统与断点重启完成，重启逐位复现**；粒子间相互作用力尚未实现（`F[n]` 恒为 0）。
+流体求解器、交错网格封装、噪声标定（流体侧+粒子侧）、配置系统与断点重启均已验证；
+**粒子间相互作用力（WCA/Morse/LJ126 + 外场）已实现并通过数值判据**；
+自检拆成独立可执行 `fpd_check`，`FpdState` 消除了 4 份分配/映射样板。
 
 ## 总体规划
 
-7 个阶段，约 16.5-21.5 天。顺序原则：**先修缺陷建立可信基线 → 钉死噪声 → 定量验证 → 才上生产算例**。
+8 个阶段。顺序原则：**先修缺陷建立可信基线 → 钉死噪声 → 定量验证 → 才上生产算例**。
 
-| 阶段 | 内容 | 估计 | 状态 |
-|---|---|---|---|
-| 0 | 基线固化、git、README | 0.5 天 | ✅ 完成 |
-| 1 | 交错网格封装 + 缺陷修复 | 2.5 天 | ✅ 完成 |
-| 2 | 配置文件 + 二进制 IO/重启 + CMake | 2-3 天 | ✅ 完成（FpdState 未做，见下） |
-| 3 | λ^T + 噪声标定 + dt 扫描 | 2-3 天 | ✅ 3A + 3B + 常量表完成 |
-| 4 | Stokes 阻力 + VAF/MSD + L 外推 | 3-4 天 | ⬜ 未开始（下一步） |
-| 5 | 粒子间力 + cell list + 多粒子 | 3 天 | ⬜ 未开始 |
-| 6 | 生产算例 + 旧代码对照 | 3-5 天 | ⬜ 未开始 |
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| 0 | 基线固化、git、README | ✅ 完成 |
+| 1 | 交错网格封装 + 缺陷修复 | ✅ 完成 |
+| 2 | 配置文件 + 二进制 IO/重启 + CMake | ✅ 完成（FpdState 已在 Phase 5 一并做掉） |
+| 3 | λ^T + 噪声标定 + dt 扫描 | ✅ 3A + 3B + 常量表完成 |
+| 4 | Stokes 阻力 + VAF/MSD + L 外推 | ⬜ 未开始（下一步） |
+| 5 | 粒子间力 + 外场 + fpd_check 拆分 | ✅ 完成（本次） |
+| 6 | 生产算例 + 旧代码对照 | ⬜ 未开始 |
+| 7 | z 向无滑移壁面（重力沉降） | ⬜ 未开始（用户要求立项，见下） |
 
 完整计划（含各阶段的详细设计决策 D0-D8）：`~/.claude/plans/doc-doc-old-code-fuzzy-blum.md`
 
@@ -70,7 +72,7 @@ C9（死代码）、C11（返回码未检查）。
 - `update_particale_VandR` 拆成 `update_particle_velocity` + `update_particle_position`
 - 新增不折叠位置 `Rux/Ruy/Ruz`（MSD 用，与 `R` 同 kernel 积分）
 
-**验收结果**（`./build/fpd --check`）：
+**验收结果**（`./build/fpd_check --check`）：
 
 ```
 力守恒 |err| ~ 1e-15 ... 2e-14        F=(1,2,3)，三个亚格点位置
@@ -222,10 +224,67 @@ dt 扫描（各档总物理时间相同 T=600）：
 
 ---
 
+### Phase 5 — 粒子间力 + 外场 + fpd_check 拆分
+
+本次按用户要求**提前做了 Phase 5 的力**（原排期在 Phase 4 之后），理由：拆分自检是
+Phase 4/5 的共同前置（Phase 4 要加 VAF/MSD 分析路径，不能再往 943 行的 main.cpp 塞），
+`FpdState` 正是长跑路径要用的样板去重，两个阶段互不阻塞。
+
+**三个前置 spike**（见 `baseline/spike_state_and_pair.log`）：
+
+- `spike_state_map`：运行时 API（acc_copyin/acc_create/...）建的映射能被另一个 TU 的
+  `present()` 认账；**成员函数里的 pragma 也实测可行**（推翻「成员函数= lambda 会挂」
+  的担忧，CLAUDE.md 只记录过 lambda）。FpdState 最终用运行时 API，`acc_is_present`
+  直接支撑 `require()` 运行时断言。
+- `spike_pair_bench`：**推翻了「粒子间力在 CPU 侧算」的决策记录**。实测 CPU 串行在
+  N=363 时 2.7 ms（占 42%！），GPU 全矩阵 129 µs（占 2%）—— 决策记录漏算了 O(N²)
+  计算本身，且「CPU 才能逐位重启」不成立（GPU reduction 逐位可复现）。这是本项目
+  **第四次「实测推翻了计划里的假设」**。结论：力在 GPU 算（gang-over-i +
+  vector-reduction-over-j 全矩阵，零 atomic）。
+- `spike_potential_ref`：独立 Python 实现三种势，产出黄金表。
+
+**交付**：
+
+| 模块 | 文件 | 说明 |
+|---|---|---|
+| `FpdState` | `src/State.{h,cpp}` | 4 份分配/映射/释放样板收成 1 份，`require()` 把 present 遗漏从「跑出垃圾数」变成「启动即 abort」 |
+| 势函数 | `src/include/Potential.h` + `src/Potential.cpp` | WCA/Morse/LJ126 + none；WCA 不是独立分支（≡ LJ + 派生 rcut + 移位）；pair_energy 与 pair_force 两份独立实现 |
+| 外场 | `Config.h` 的 `gravity_x/y/z` + `gravity_compensate` | 背景力密度 bg=−ΣF/size 抵消 k=0 漂移 |
+| 自检拆分 | `src/CheckMain/CheckStencil/CheckNoise/CheckPotential.cpp` | 独立可执行 `fpd_check`，`fpd` 旧命令打印迁移提示 |
+| RNG 统一 | — | 3A/3B 从 XORWOW 改 Philox（与生产一致，CMakeLists 注释早已要求） |
+| 判据 J1-J7 | — | 见下 |
+
+**验证结果**：
+
+```
+--check-potential（纯 CPU，无卡可跑）：全绿
+  J1 力=-dU/dr 四阶差分    max 相对差 ~1e-12   （抓到真实 bug：s6 算成三次方，力差 200 倍）
+  J2 Python 黄金表对照     max 相对差 ~1e-16
+  J3 最小镜像 vs 暴力枚举    J4 N=3 等边三角形   J6 特征点 + 零判据
+--check（含 J5）：全绿
+  GPU vs CPU 对照 0 相对差   GPU 两次逐位  力守恒 Σf==ΣF 及 bg 补偿 Σf==0（~1e-14）
+fpd_tool --verify-forces：正向 PASS（F 自洽），负向 FAIL（配错参数检测到）
+smoke.cfg 逐位回归：potential=none 默认逐位相同
+N=4 不重叠逐位：跨进程逐位相同
+吞吐：N=100 加力 111.2 vs 无势 110.9 步/秒（力代价 <0.3%）
+3B frozen seed=1（Philox）：0.9747 ± 0.0337（0.7σ PASS），与 baseline 1.005 统计一致
+```
+
+**关键发现：FPD 逐位重启只在粒子支撑域不重叠时成立**。实测 N=8 间距 10.5（< 2·range=16.8，
+重叠）跨进程有 ~1e-16 差异（v 场），N=4 间距 17.2（不重叠）逐位相同。根源是
+`Viscosity.cpp` 的 `eta[ijk] += d_eta*w` atomic 累加顺序跨进程不确定 —— 这是 FPD 的
+固有特性，**不是粒子间力引入的 bug**（potential=none 的 N=8 重叠构型同样不逐位）。
+而「粒子间力」需要粒子靠近（间距 < rcut ≤ 15），靠近必然重叠，所以「有力 + 逐位重启」
+在当前盒子下**原理上不可兼得**。J8 因此改为「GPU 力确定性（J5 的 GPU vs CPU 对照 +
+GPU 两次逐位）+ 不重叠构型的完整逐位重启」，而非「N=8 重叠粒子的逐位重启」。
+
+---
+
 ## 待办：下一步
 
-**建议直接进 Phase 4（Stokes 阻力 + VAF/MSD）。** Phase 0/1/2/3 全部完成，
-没有阻塞项：3B 解除了 dt 的不确定性（生产可用 0.002），Phase 2 给了配置系统和断点重启。
+**建议直接进 Phase 4（Stokes 阻力 + VAF/MSD）。** Phase 0/1/2/3/5 全部完成，
+没有阻塞项：3B 解除了 dt 的不确定性（生产可用 0.002），Phase 2 给了配置系统和断点重启，
+Phase 5 给了粒子间力和 fpd_check 拆分。
 
 Phase 4 的关键设计已经想清楚：**必须做 L∈{64,96,128,192} 外推** ——
 a/L=0.05 时 Hasimoto 有限尺寸修正是 **14% 偏差**，远大于要验证的几个百分点，
@@ -234,13 +293,15 @@ a/L=0.05 时 Hasimoto 有限尺寸修正是 **14% 偏差**，远大于要验证�
 
 ### 其余待办
 
-- **`FpdState` 未做**（Phase 2 唯一未完成项，**不阻塞 Phase 4**）。四个自检路径
-  （`run_force_conservation_check` / `run_overlap_check` / `run_noise_check` /
-  `run_equipartition_check`）各自复制了一份分配-映射-释放样板，共 4 份漂移风险 ——
-  这是下一个 C1/C2 式漂移的温床。生产路径已改完，收益主要在自检路径，可随时补
-- **Phase 5**：势函数 enum+switch 接口、O(N²) 参考实现、修好的 cell list。
-  注意旧 cell list 有 `nnIndex[12]` 未赋值的 bug 且 z 向 cell 数不足 3，
-  363 粒子直接用 O(N²) 才是正解
+- **Phase 4**（Stokes 阻力 + VAF/MSD + L 外推）：下一步，无阻塞项。
+  `FpdState` 已就位，加 VAF/MSD 分析路径时直接复用。
+- **Phase 7**（z 向无滑移壁面）：用户要求立项。上下都是无滑移硬壁。改动面是一个完整
+  Phase：泊松求解器从 3D 全周期 FFT 改 xy 向 2D FFT + z 向逐 (kx,ky) 三对角；
+  `Stokes.cpp`/`Stencil.h`/`Velocity.cpp` 的 z 向回绕全改；**3A/3B 的能量均分目标值
+  要重新推导**（模式基不再是纯 Fourier）。旧代码在这里是错的（z 向反射 hack 破坏
+  ∇·v=0），无照抄对象。壁面上线后 `gravity_compensate` 默认转 0。
+- **cell list**：363 粒子 O(N²) 足够。GPU 方案下迁移阈值比原来的 `N > 2×10⁴` 还高
+  （S0-C 实测 N=1000 仍只占 11%），具体以 N 标度实测为准。
 - **Phase 6**：生产算例，边界条件三选一（先复现旧行为建立对照，别一次改两个变量）
 - **性能优化未立项**：128×64×32 只有 153 步/秒。Phase 4 的 L=192 是 27 倍网格量，
   若排期吃紧，瓶颈在 `Stokes.cpp` 散度计算的约 18 次邻居访问（`k±1` 跨步 64 KB）
@@ -270,7 +331,7 @@ a/L=0.05 时 Hasimoto 有限尺寸修正是 **14% 偏差**，远大于要验证�
 | `Field<L>` 类型标签 | **降级为可选**，暂未实现 | 挡不住 C1（标量除法合法）。若与 `present()` 配合不顺就放弃，不为类型漂亮牺牲 GPU 映射可控性 |
 | 转动自由度 | 暂不实现 | 用户决定。保持 [PRL 2000] / 旧代码的层次 |
 | 势函数 | enum + POD 参数 + `routine seq` 的 switch | 用户要可切换。同一份源码 CPU/GPU 都能编译，无函数指针（OpenACC 设备端不可靠） |
-| 粒子间力 | CPU 侧算，pair kernel 写成 `routine seq` | 传输 17 KB/步（N=363）延迟主导约 20-40 µs，NS 求解 1-3 ms，占比 < 3%。迁 GPU 阈值：N > 2×10⁴ 或占比 > 10% |
+| 粒子间力 | **GPU 侧算**，gang-over-i + vector-reduction-over-j 全矩阵（零 atomic） | `spike_pair_bench` 实测**推翻**了原「CPU 侧算」决策：CPU 串行 N=363 时 2.7 ms（占 42%！），GPU 全矩阵 129 µs（占 2%）。原论据漏算了 O(N²) 计算本身，且「CPU 才能逐位重启」不成立（GPU reduction 逐位可复现，与 sum_phi/V 同机制） |
 | 参数输入 | 配置文件 + `.fpd` 初始构型（由 Python 生成） | 用户决定弃用旧 init 文本格式。结果：C++ 只剩一条输入路径、零文本解析，旧格式的「三重循环顺序写反不报错」陷阱直接消失 |
 | 可视化 | C++ 只写二进制，Python 离线转 VTK | 用户决定。热路径开销从 ~100 ms/次降到 3.9 ms；且 Python 侧用 VTK 自带 writer，不手写 XML，schema 出错的风险类别整个消失 |
 | RNG offset | slot 方案（按 step 定位），**不做累计记账** | 实测推翻原方案：XORWOW 无法逐位重启；且「生成 n 前进 n」的模型是错的 |
@@ -280,12 +341,23 @@ a/L=0.05 时 Hasimoto 有限尺寸修正是 **14% 偏差**，远大于要验证�
 | 3B 的 kT | 0.25 而非 1.0 | 信噪比与 kT 无关（信号和涨落同比例）、τ 与 kT 无关，所以降 kT **不花任何代价**，却把对流非线性风险降 4 倍。3A 在 kT=1 下相对精确式有 ~2.4% 残差，很可能就是对流项 |
 | 3B 的 ghost 模式 | 靠 `ratio_eta=1.0` 实现，**不写特例分支** | C3 修复留下的 `d_eta = ratio_eta − 1` 让它零成本，且走**完全相同**的代码路径（`sum_phi` 照算、`stencil_point` 照跑），只是 η 场是平的 |
 | 采样间隔 | 在**物理时间**上固定（`samp_every = 0.5/dt`） | 固定步数会让 dt 越小样本越相关，同样物理时间得到更多但更相关的样本，分块平台反而更难出现 —— pilot 实测踩到了这个坑 |
+| 自检代码去处 | **独立可执行 `fpd_check`** | 用户决定。main.cpp 涨到 943 行成瓶颈，自检拆出后 `fpd` 只剩生产路径；`fpd` 旧命令打印迁移提示而非静默 |
+| 势参数进 `.fpd` header | **不进** | Python 侧用不到（现有 5 个物理量都是 make_init/可视化要用的）；加进去制造「文件说 Morse 配置说 WCA」的静默冲突。自洽性由 `fpd_tool --verify-forces` 兜底 |
+| WCA 实现 | **不是独立分支**（≡ LJ + 派生 rcut=2^{1/6}σ + 移位） | U'(rc)=0 使能量移位与力移位恒等，switch 只剩 3 分支，消除旧代码 cul_WCA/cul_LJ6 两份复制粘贴漂移 |
+| LJ/Morse 截断移位 | 默认 `shift=energy`（U 移位，力不变） | `force` 会改阱深（Morse α=1 rcut=15 时 50→49.57），是物理改变。残余力比 `|U'(rc)|/max|U'| > 1e-6` 报警，把「照抄 22.2」变成有数字支撑的决策 |
+| RNG 发生器 | 3A/3B 统一 Philox | CMakeLists 注释白纸黑字「验证与生产走同一代码路径」，且 XORWOW 无法逐位重启。代价是 3A/3B 数字变（统计等价），重跑 3B frozen 确认比值落在误差棒内 |
+| 外场 k=0 漂移 | `gravity_compensate`（默认 1）+ 背景力密度 bg=−ΣF/size | 均匀外场 ΣF=N·g≠0 使流体 k=0 线性加速、整盒漂移，废掉 3B 目标公式。壁面 Phase 7 上线后此开关默认转 0（壁面提供真实动量汇） |
+| `FpdState` 映射机制 | **运行时 API**（acc_copyin/acc_create/...） | spike_state_map 实测：运行时 API 建的映射能被另一 TU 的 present() 认账，成员函数 pragma 也可行；运行时 API 可查询（acc_is_present 支撑 require()） |
 
 ---
 
 ## 已知隐患
 
-0. **`FpdState` 未实现** —— 四个自检路径仍各自维护一份分配/映射样板（见「待办」）
+0. **FPD 逐位重启只在粒子支撑域不重叠时成立**（间距 > 2·range = 16.8）。重叠时
+   `eta[ijk] += d_eta*w` 的 atomic 累加顺序跨进程不确定（~1e-16 差异）。这是 FPD 的
+   固有特性，不是粒子间力引入的 bug（potential=none 的 N=8 重叠同样不逐位）。而
+   「粒子间力」需要粒子靠近（间距 < rcut ≤ 15），靠近必然重叠 —— 「有力 + 逐位重启」
+   当前盒子下原理上不可兼得。逐位重启回归用 N=1/N=2 不重叠构型。
 1. **性能**：128×64×32 是 **153 步/秒**、32³ 是 **1128 步/秒**（GPU 均 99% 饱和）。
    注意 32³ 格点少 8 倍却只快 7.4 倍 —— 已接近**启动延迟主导**，
    所以「小盒子会快很多」的直觉不成立。瓶颈在 `Stokes.cpp` 散度计算的约 18 次邻居访问，
@@ -308,6 +380,10 @@ a/L=0.05 时 Hasimoto 有限尺寸修正是 **14% 偏差**，远大于要验证�
 ## 提交历史
 
 ```
+3aa0f97  Phase 5: 主循环接线粒子间力 + 背景力密度补偿 + 端到端判据
+d7643fb  Phase 5: 配置接线势参数 + 最小镜像硬约束 + 参数查表
+e1a747e  Phase 5: 势函数模块 + 纯 CPU 判据 (--check-potential)
+9fa2853  重构: 提取 FpdState + 拆分 fpd_check + RNG 统一 Philox + 修 config.used 覆盖 bug
 9ed91b5  Phase 2: 配置文件 + 二进制 .fpd IO + 逐位重启, C++ 不再产出可视化格式
 1574432  测试 3B: 粒子能量均分验证 + 常量表, 证实 O(dt) 偏差不被 eta 放大
 48b8fb3  补充 CLAUDE.md 与 PROGRESS.md
@@ -322,9 +398,13 @@ ae13f10  Phase 0: 基线固化 - README 记录缺陷清单, spike 验证模板 r
 ```
 src/            Stencil.h(交错网格唯一真值源) Common.h(POD+工厂) Check.h
                 Stokes/Viscosity/Force/Velocity(物理)  Analysis(常量表+分块平均)
-                Config(key=value) IOBin(.fpd)  main.cpp(生产+4个自检) tool_main.cpp
+                Config(key=value) IOBin(.fpd) State(分配/映射/释放唯一持有者)
+                Potential(势函数+最小镜像+力装配)  Tests.h(自检声明)
+                main.cpp(生产)  CheckMain/CheckStencil/CheckNoise/CheckPotential.cpp(fpd_check)
+                tool_main.cpp(fpd_tool)
 tools/          fpd_format.py(格式镜像) make_init.py(纯stdlib) fpd2vtk.py verify_vtk.py(pvpython)
 spike/          template_routine(模板+routine seq) rng_offset/rng_slice/rng_advance(RNG 语义)
+                state_map(映射机制) pair_bench(力算 GPU 判决) potential_ref(黄金表)
 config/         smoke.cfg production.cfg
 baseline/       各阶段实验日志与参考轨迹
 doc/old_code/   上一代 OpenMP 实现，仅供参考、不是真值
