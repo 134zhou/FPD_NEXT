@@ -214,12 +214,14 @@ pot_alpha/pot_r_eq/pot_rcut/pot_shift`。
 
 ## 当前进度（详见 `PROGRESS.md`）
 
-Phase 0/1/2/3/5 完成。流体求解器、交错网格封装、噪声标定（3A + 3B）、配置系统、
-逐位断点重启、**粒子间相互作用力（WCA/Morse/LJ126 + 外场）**均已通过数值判据。
-`FpdState` 已实现（Phase 2 遗留销掉），自检拆成独立可执行 `fpd_check`。
+Phase 0/1/2/3/5 完成，**Phase 7-A 完成**。流体求解器、交错网格封装、噪声标定
+（3A + 3B）、配置系统、逐位断点重启、**粒子间相互作用力（WCA/Morse/LJ126 + 外场）**、
+**z 向壁面压力泊松求解器（xy 2D FFT + z 向 Thomas，`src/Poisson.cpp`）**均已通过
+数值判据。`FpdState` 已实现，自检拆成独立可执行 `fpd_check`。
 
-下一步是 Phase 4（Stokes 阻力 + VAF/MSD），无阻塞项。Phase 7（z 向无滑移壁面）
-已按用户要求立项 —— 壁面提供真实动量汇，重力沉降才不整盒漂移。
+下一步是 Phase 4（Stokes 阻力 + VAF/MSD），无阻塞项。Phase 7 剩余部分是 **7-B
+接线**（把壁面 BC 接进 `Stokes.cpp`，显式 `v*` 重构 + `Wall.h` + 相场壁面截断 +
+粒子侧壁面势），求解器已就绪待接线。
 
 ## 工作方式
 

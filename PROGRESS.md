@@ -322,9 +322,10 @@ spike_tridiag       T1 Thomas vs Gauss 2.8e-16  T2 定规 |x0|=2.2e-16  T3 不�
 
 ## 待办：下一步
 
-**建议直接进 Phase 4（Stokes 阻力 + VAF/MSD）。** Phase 0/1/2/3/5 全部完成，
+**建议直接进 Phase 4（Stokes 阻力 + VAF/MSD）。** Phase 0/1/2/3/5/7-A 全部完成，
 没有阻塞项：3B 解除了 dt 的不确定性（生产可用 0.002），Phase 2 给了配置系统和断点重启，
-Phase 5 给了粒子间力和 fpd_check 拆分。
+Phase 5 给了粒子间力和 fpd_check 拆分，Phase 7-A 把壁面泊松求解器提前落地（未接线，
+不占生产路径）。Phase 7-B（壁面接线）是独立轨道，与 Phase 4 互不阻塞，可并行。
 
 Phase 4 的关键设计已经想清楚：**必须做 L∈{64,96,128,192} 外推** ——
 a/L=0.05 时 Hasimoto 有限尺寸修正是 **14% 偏差**，远大于要验证的几个百分点，
@@ -428,6 +429,7 @@ a/L=0.05 时 Hasimoto 有限尺寸修正是 **14% 偏差**，远大于要验证�
 ## 提交历史
 
 ```
+ce2ef34  Phase 7-A: 壁面压力泊松求解器(xy 2D FFT + z 向 Thomas) + 算子往返判据 + 数学推导文档
 3aa0f97  Phase 5: 主循环接线粒子间力 + 背景力密度补偿 + 端到端判据
 d7643fb  Phase 5: 配置接线势参数 + 最小镜像硬约束 + 参数查表
 e1a747e  Phase 5: 势函数模块 + 纯 CPU 判据 (--check-potential)
@@ -447,13 +449,15 @@ ae13f10  Phase 0: 基线固化 - README 记录缺陷清单, spike 验证模板 r
 src/            Stencil.h(交错网格唯一真值源) Common.h(POD+工厂) Check.h
                 Stokes/Viscosity/Force/Velocity(物理)  Analysis(常量表+分块平均)
                 Config(key=value) IOBin(.fpd) State(分配/映射/释放唯一持有者)
-                Potential(势函数+最小镜像+力装配)  Tests.h(自检声明)
-                main.cpp(生产)  CheckMain/CheckStencil/CheckNoise/CheckPotential.cpp(fpd_check)
+                Potential(势函数+最小镜像+力装配)  Poisson(压力泊松: 周期 3D FFT / 壁面 2D FFT+Thomas)
+                Tests.h(自检声明)
+                main.cpp(生产)  CheckMain/CheckStencil/CheckNoise/CheckPotential/CheckPoisson.cpp(fpd_check)
                 tool_main.cpp(fpd_tool)
 tools/          fpd_format.py(格式镜像) make_init.py(纯stdlib) fpd2vtk.py verify_vtk.py(pvpython)
 spike/          template_routine(模板+routine seq) rng_offset/rng_slice/rng_advance(RNG 语义)
                 state_map(映射机制) pair_bench(力算 GPU 判决) potential_ref(黄金表)
+                fft2d_batch(2D 批量 FFT 轴序/归一化) tridiag(Thomas vs 稠密 Gauss + 定规)
 config/         smoke.cfg production.cfg
 baseline/       各阶段实验日志与参考轨迹
-doc/old_code/   上一代 OpenMP 实现，仅供参考、不是真值
+doc/            PressurePoisson.md(泊松数学推导，与 Poisson.cpp 共同定义算子)  old_code/(仅供参考)
 ```
