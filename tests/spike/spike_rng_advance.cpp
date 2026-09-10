@@ -6,7 +6,7 @@
 //
 // 本 spike 用二分/扫描测出真实前进量 adv(n)，看它是否是 n 向上取整到某个粒度。
 //
-// 编译：nvc++ -acc -cuda -cudalib=curand -O2 spike/spike_rng_advance.cpp -o build/spike_adv
+// 编译：nvc++ -acc -cuda -cudalib=curand -O2 tests/spike/spike_rng_advance.cpp -o build/spike_adv
 #include <cstdio>
 #include <cstring>
 #include <vector>

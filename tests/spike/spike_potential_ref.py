@@ -6,7 +6,7 @@
 # spike_template_routine.cpp 曾用独立 Python 复核 ∫φ = 170.3051225223 到全位一致。
 #
 # 纯 stdlib，任何 python3 都能跑：
-#   python3 spike/spike_potential_ref.py > spike/potential_golden.txt
+#   python3 tests/spike/spike_potential_ref.py > tests/spike/potential_golden.txt
 #
 # 约定：g(r) 是标量因子，C++ 侧 F_i = g * (R_i - R_j)。g > 0 表示排斥。
 #       能量用 shift=energy（默认），即 U(r) = U_bare(r) - U_bare(rcut)，U(rcut)=0。

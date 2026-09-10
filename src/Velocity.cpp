@@ -1,4 +1,4 @@
-#include "./include/Velocity.h"
+#include "Velocity.h"
 
 void update_particle_velocity(
     NS_Config cfg, PhiParams pp,

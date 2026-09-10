@@ -2,10 +2,10 @@
 #include <cmath>
 #include <vector>
 
-#include "./include/Poisson.h"
-#include "./include/State.h"
-#include "./include/Tests.h"
-#include "./include/Check.h"
+#include "Poisson.h"
+#include "State.h"
+#include "Tests.h"
+#include "Check.h"
 
 // ============================================================================
 // 压力泊松求解器自检。两个入口：

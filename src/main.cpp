@@ -8,17 +8,17 @@
 #include <string>
 #include <openacc.h>
 
-#include "./include/Common.h"
-#include "./include/Stencil.h"
-#include "./include/Check.h"
-#include "./include/Force.h"
-#include "./include/Viscosity.h"
-#include "./include/Stokes.h"
-#include "./include/Config.h"
-#include "./include/IOBin.h"
-#include "./include/State.h"
-#include "./include/Potential.h"
-#include "./include/Velocity.h"
+#include "Common.h"
+#include "Stencil.h"
+#include "Check.h"
+#include "Force.h"
+#include "Viscosity.h"
+#include "Stokes.h"
+#include "Config.h"
+#include "IOBin.h"
+#include "State.h"
+#include "Potential.h"
+#include "Velocity.h"
 
 // ============================================================================
 // 生产路径：配置驱动 + .fpd 断点重启
@@ -27,7 +27,7 @@
 // 文件里的 step 决定从哪继续。可视化由 tools/fpd2vtk.py 离线转换。
 //
 // 自检与验证路径（--check / --lambda / --noise / --equipart）已迁移到
-// 独立可执行 fpd_check（src/CheckMain.cpp + CheckStencil.cpp + CheckNoise.cpp）。
+// 独立可执行 fpd_check（tests/CheckMain.cpp + CheckStencil.cpp + CheckNoise.cpp）。
 // ============================================================================
 static int run_production(const FpdConfig& c)
 {

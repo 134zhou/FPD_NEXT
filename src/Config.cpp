@@ -1,4 +1,4 @@
-#include "./include/Config.h"
+#include "Config.h"
 
 #include <cstdio>
 #include <cstdlib>

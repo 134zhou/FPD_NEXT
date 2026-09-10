@@ -1,4 +1,4 @@
-#include "./include/Analysis.h"
+#include "Analysis.h"
 
 #include <cstdio>
 #include <cmath>

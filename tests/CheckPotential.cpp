@@ -2,8 +2,8 @@
 #include <cmath>
 #include <vector>
 
-#include "./include/Potential.h"
-#include "./include/Tests.h"
+#include "Potential.h"
+#include "Tests.h"
 
 // ============================================================================
 // 势函数自检（纯 CPU，无卡可跑）
@@ -90,7 +90,7 @@ static void check_force_derivative(const PotentialParams& pot, double r_lo, doub
 
 // ---------------------------------------------------------------------------
 // J2：Python 黄金表对照（独立实现，非自洽）。
-// 数值来自 spike/spike_potential_ref.py，17 位有效数字。
+// 数值来自 tests/spike/spike_potential_ref.py，17 位有效数字。
 // ---------------------------------------------------------------------------
 struct GoldenPt { double r, U, g; };
 
@@ -284,7 +284,7 @@ int run_potential_check()
         check_force_derivative(morse, 0.6 * 7.4, 1.4 * 15.0);
     }
 
-    // J2：黄金表（数值来自 spike/potential_ref.py）
+    // J2：黄金表（数值来自 tests/spike/potential_ref.py）
     {
         const PotentialParams wca = make_potential_params(POT_WCA, SHIFT_ENERGY, 1.0, 7.4, 0, 0, 0, 0);
         const GoldenPt wca_pts[] = {

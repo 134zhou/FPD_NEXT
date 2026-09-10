@@ -8,7 +8,7 @@
 //   Q4  acc_create 与 acc_delete 的引用计数是否对称？
 //
 // 编译：
-//   nvc++ -acc -O2 -Minfo=accel spike/spike_state_map.cpp spike/spike_state_map_kernel.cpp -o build/spike_state
+//   nvc++ -acc -O2 -Minfo=accel tests/spike/spike_state_map.cpp tests/spike/spike_state_map_kernel.cpp -o build/spike_state
 //   ./build/spike_state
 //
 // 判据：kernel 里 p[i]*2 写到 out[i]，update host 拉回后 out[i] 必须【逐位】等于

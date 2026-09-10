@@ -13,7 +13,7 @@
 //   T3  相容性被破坏（人为 Σb≠0）时解会漂移 —— 证明「减均值」不是多余的
 //
 // 编译（任意 C++ 编译器即可，无 CUDA 依赖）：
-//   g++ -O2 spike/spike_tridiag.cpp -o /tmp/st && /tmp/st
+//   g++ -O2 tests/spike/spike_tridiag.cpp -o /tmp/st && /tmp/st
 
 #include <cstdio>
 #include <cstdlib>

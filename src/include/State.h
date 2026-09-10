@@ -15,7 +15,7 @@
 // → exit data」样板，共 4 份 —— 这是 C1/C2 式漂移的温床。FpdState 把它收成一份。
 //
 // 映射机制：用 OpenACC【运行时 API】（acc_copyin/acc_create/acc_update_self/
-// acc_update_device/acc_delete），不用 pragma。实测（spike/spike_state_map.cpp）：
+// acc_update_device/acc_delete），不用 pragma。实测（tests/spike/spike_state_map.cpp）：
 // 运行时 API 建的映射能被【另一个 TU】里的 present() 子句完全认账，
 // 且 acc_is_present 可用于运行时断言。这是它相对 pragma 的最大优势 ——
 // 见 require()。

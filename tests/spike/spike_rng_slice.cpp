@@ -5,7 +5,7 @@
 //   Q2 一次生成 2n，与在同一发生器上连续生成两次 n，是否拼接相等？（分批等价性）
 //   Q3 setOffset(n) 后生成 n，是否等于「连续两次生成 n」的第二次？（可跳转性）
 //
-// 编译：nvc++ -acc -cuda -cudalib=curand -O2 spike/spike_rng_slice.cpp -o build/spike_slice
+// 编译：nvc++ -acc -cuda -cudalib=curand -O2 tests/spike/spike_rng_slice.cpp -o build/spike_slice
 #include <cstdio>
 #include <cstring>
 #include <vector>

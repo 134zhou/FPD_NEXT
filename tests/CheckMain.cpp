@@ -12,8 +12,8 @@
 #include <cstdlib>
 #include <cstdio>
 
-#include "./include/Tests.h"
-#include "./include/Analysis.h"
+#include "Tests.h"
+#include "Analysis.h"
 
 int main(int argc, char** argv)
 {

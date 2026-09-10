@@ -2,14 +2,14 @@
 #include <iomanip>
 #include <cmath>
 
-#include "./include/Tests.h"
-#include "./include/Stencil.h"
-#include "./include/Analysis.h"
-#include "./include/Force.h"
-#include "./include/Viscosity.h"
-#include "./include/Velocity.h"
-#include "./include/State.h"
-#include "./include/Potential.h"
+#include "Tests.h"
+#include "Stencil.h"
+#include "Analysis.h"
+#include "Force.h"
+#include "Viscosity.h"
+#include "Velocity.h"
+#include "State.h"
+#include "Potential.h"
 
 // ============================================================================
 // Phase 1 自检：力守恒 + 亚格点不变性
@@ -18,7 +18,7 @@
 // 且该等式与粒子在格胞内的分数位置无关。
 //
 // ⚠️ 这个判据检验的是 stencil_point 的【自洽性】，对它的内部公式错误是盲的
-//    （投影和归一化会一起错）。独立的数值对照见 spike/。
+//    （投影和归一化会一起错）。独立的数值对照见 tests/spike/。
 // ============================================================================
 int run_force_conservation_check(NS_Config cfg, PhiParams pp)
 {

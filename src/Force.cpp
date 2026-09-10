@@ -1,4 +1,4 @@
-#include "./include/Force.h"
+#include "Force.h"
 
 void update_force_field(
     NS_Config cfg, PhiParams pp,

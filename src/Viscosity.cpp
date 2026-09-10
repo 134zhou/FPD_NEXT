@@ -1,4 +1,4 @@
-#include "./include/Viscosity.h"
+#include "Viscosity.h"
 
 void update_viscosity_fields(
     NS_Config cfg, PhiParams pp,

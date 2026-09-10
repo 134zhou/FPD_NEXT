@@ -15,7 +15,7 @@
 //   P3  inembed=NULL 与 inembed=n 给出相同结果（确认基本布局假设）
 //
 // 编译：
-//   nvc++ -acc -O3 -I<CUDA_INC> -Isrc/include spike/spike_fft2d_batch.cpp -lcufft -o /tmp/sf
+//   nvc++ -acc -O3 -I<CUDA_INC> -Isrc/include tests/spike/spike_fft2d_batch.cpp -lcufft -o /tmp/sf
 //   /tmp/sf
 
 #include <cstdio>

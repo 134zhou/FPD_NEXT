@@ -7,9 +7,13 @@
 
 ## 构建与测试
 
+**代码布局**：`src/` = 生产代码（只有 `fpd`），`tests/` = 全部验证与测试代码
+（`fpd_check`、`fpd_tool`、以及不参与构建的 `tests/spike/`）。
+`fpd_core` 静态库里**只有 src/** —— 加新文件时先想清楚它属于哪一侧。
+
 ```bash
 cmake -B build && cmake --build build -j     # nvc++ 26.3 + CUDA 13.1 + CMake 4.2.3
-                                              # 产出 build/fpd（模拟）与 build/fpd_tool（纯 CPU 工具）
+                                              # 产出 build/fpd / fpd_check / fpd_tool
 
 ./build/fpd config/smoke.cfg [--set k=v ...]  # 生产运行；--set 覆盖配置项
 ./build/fpd_check --check                     # 自检：力守恒 / 亚格点 / 混叠 / N=2 重叠 / 力链路
@@ -85,7 +89,7 @@ Phase 4 的 L=192 立方盒是 27 倍网格量。检查点写入 3.9 ms/次，�
 
 **`n_range` 必须是 `2*range + 1`，不能是 `2*range`。** 盒取 `[kn-range, kn+range]`。
 半径 `range` 的球心落在格胞任意位置时能触及的整数层最多 `2*range+1` 个，窄一号的盒
-会在负方向**静默漏掉一层**（Phase 7-B 修掉的缺陷，复现脚本 `spike/spike_stencil_box.py`）。
+会在负方向**静默漏掉一层**（Phase 7-B 修掉的缺陷，复现脚本 `tests/spike/spike_stencil_box.py`）。
 漏掉的权重随亚格点位置与 `Loc` 变化 ⇒ 方向相关的伪偏差，且**力守恒判据抓不到**
 （分子分母一起漏，比值自洽）。判它的手段只有两个：暴力枚举全空间对照，或与连续积分对照。
 
@@ -107,13 +111,13 @@ Phase 4 的 L=192 立方盒是 27 倍网格量。检查点写入 3.9 ms/次，�
 - 但同一 offset 生成同样数量必定逐位可复现，不同 slot 之间零共同值、
   互相关 ~1/√n（统计独立）
 
-证据在 `spike/spike_rng_offset.cpp`、`spike_rng_slice.cpp`、`spike_rng_advance.cpp`。
+证据在 `tests/spike/spike_rng_offset.cpp`、`spike_rng_slice.cpp`、`spike_rng_advance.cpp`。
 `.fpd` 里的 `rng_draws` 字段**仅供人读**，读回时不采信，offset 一律由 step 重算。
 
 ### 3. 两个测试盲区（都真实骗过人）
 
 - **力守恒判据对 `stencil_point` 的内部公式错误是盲的** —— 投影和归一化会一起错，
-  `Σf == F` 照样成立。需要独立数值对照，见 `spike/spike_template_routine.cpp`
+  `Σf == F` 照样成立。需要独立数值对照，见 `tests/spike/spike_template_routine.cpp`
   （用独立写的 Python 复核过 `∫φ`）。⚠️ 那份 Python 参考**当时复制了同一个模板盒
   尺寸**，所以两处一起错、没能发现模板盒缺陷（Phase 7-B 才发现，见约束 1）。
   **共享假设的参考实现不是独立参考** —— 真正的判决者是连续球坐标积分与暴力枚举。
@@ -181,6 +185,8 @@ vector-reduction-over-j，零 atomic），求和顺序在固定 N 与固定 gang
 - **单位**：格距 `dx ≡ 1`，密度 `ρ ≡ 1`，溶剂粘度 `η_ℓ ≡ 1`
 - 风格接近「带 vector 的 C」：裸指针 + OpenACC 手动映射，不用 class/智能指针/异常。
   新代码沿用，别引入现代 C++ 抽象（`Stencil.h` 的模板是唯一例外，且已验证不影响 kernel 生成）
+- **放新文件**：生产代码进 `src/`（头文件进 `src/include/`），验证代码进 `tests/`。
+  `tests/` 里加文件要在 `CMakeLists.txt` 的 `fpd_check` 目标里登记
 - POD 结构体（`NS_Config`、`PhiParams`、未来的 `PotentialParams`）**按值传进 GPU 函数**。
   `acc routine seq` 里用引用参数会要求对象位于设备内存
 

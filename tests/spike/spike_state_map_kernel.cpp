@@ -1,4 +1,4 @@
-// spike/spike_state_map_kernel.cpp —— 单独的编译单元，模拟「fpd_core 里的 kernel」
+// tests/spike/spike_state_map_kernel.cpp —— 单独的编译单元，模拟「fpd_core 里的 kernel」
 //
 // 这里只有 kernel，用 #pragma acc parallel loop present(...)。
 // present 表是设备全局的，理论上与「谁建的映射」无关（无论是运行时 API 还是

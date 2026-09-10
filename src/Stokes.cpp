@@ -1,5 +1,5 @@
-#include "./include/Stokes.h"
-#include "./include/Poisson.h"
+#include "Stokes.h"
+#include "Poisson.h"
 
 void step_navier_stokes
 (

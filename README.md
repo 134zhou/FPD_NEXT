@@ -35,7 +35,16 @@ cmake -B build && cmake --build build -j
 
 环境：nvc++ 26.3（NVIDIA HPC SDK）、CUDA 13.1、CMake 4.2.3、RTX 3060 12 GB。
 
-产出两个可执行文件：`build/fpd`（模拟，需 GPU）和 `build/fpd_tool`（检查工具，纯 CPU）。
+产出三个可执行文件：
+
+| 可执行 | 来源 | 说明 |
+|---|---|---|
+| `build/fpd` | `src/main.cpp` | 模拟主程序（需 GPU） |
+| `build/fpd_check` | `tests/Check*.cpp` | 自检与验证（需 GPU；`--check-potential`/`--check-tridiag`/`--lambda` 纯 CPU） |
+| `build/fpd_tool` | `tests/tool_main.cpp` | 检查工具（纯 CPU：dump/diff 检查点、verify-forces） |
+
+**代码布局**：`src/` 只放生产代码，`tests/` 放全部验证与测试代码
+（含 `tests/spike/` 的一次性前置风险验证程序，不参与构建）。
 
 ## 输入输出
 
@@ -187,7 +196,7 @@ C1-C5、C7-C9、C11 在 Phase 1，C6（噪声标定）在测试 3A/3B，C10 由 
 
 > ⚠️ **代价**：`stencil_point` 成了单点故障，它错了三个模块一起错。
 > 而"力守恒 `Σfx == Fx[n]`"这个判据对它的内部公式错误是**盲的**（投影和归一化会一起错）。
-> 所以必须同时有独立的数值对照，见 `spike/`。
+> 所以必须同时有独立的数值对照，见 `tests/spike/`。
 
 ### 模板盒少一格（Phase 7-B 发现并修复）
 
@@ -259,7 +268,7 @@ gravity_z = -10  gravity_compensate = 1
 
 ```
 J1 力=-dU/dr 四阶差分（pair_energy 与 pair_force 两份独立实现交叉检验）
-J2 Python 黄金表对照（spike/spike_potential_ref.py，独立实现，非自洽）
+J2 Python 黄金表对照（tests/spike/spike_potential_ref.py，独立实现，非自洽）
 J3 最小镜像 vs 5 镜像暴力枚举
 J4 N=3 等边三角形解析对照（抓双计数/漏算/符号错，N=2 盲的）
 J6 势特征点 + POT_NONE 零判据 + 标号交换对称性
@@ -453,7 +462,7 @@ M_i = ρ(∫φ)²/∫φ²    = 287.6223 (x/y) / 287.6486 (z)      M_eff = 431.43
 
 ## 已完成的验证
 
-**spike（`spike/spike_template_routine.cpp`）** —— nvc++ 26.3 下：
+**spike（`tests/spike/spike_template_routine.cpp`）** —— nvc++ 26.3 下：
 
 - `#pragma acc routine seq` 作用于**模板函数**可行，`-Minfo=accel` 确认
   `stencil_point<(Loc)1>` 生成了 device routine。不需要退化成宏
@@ -510,7 +519,7 @@ M_i = ρ(∫φ)²/∫φ²    = 287.6223 (x/y) / 287.6486 (z)      M_eff = 431.43
 已验证不同 slot 之间零共同值、互相关 ~1/√n（统计独立），同一 offset 逐位可复现。
 **重启因此无需恢复任何 RNG 内部状态，只需 seed 相同 —— 逐位相等是构造上保证的。**
 
-证据：`spike/spike_rng_offset.cpp`、`spike_rng_slice.cpp`、`spike_rng_advance.cpp`。
+证据：`tests/spike/spike_rng_offset.cpp`、`spike_rng_slice.cpp`、`spike_rng_advance.cpp`。
 
 ### 可视化往返校验
 

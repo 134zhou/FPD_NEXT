@@ -1,4 +1,4 @@
-#include "./include/Potential.h"
+#include "Potential.h"
 
 PotentialParams make_potential_params(int type, int shift,
                                       double eps, double sigma,

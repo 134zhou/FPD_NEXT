@@ -1,6 +1,6 @@
-#include "./include/Poisson.h"
+#include "Poisson.h"
 
-#include "./include/Check.h"
+#include "Check.h"
 
 // ============================================================================
 // 压力泊松求解器：周期（3D FFT）与壁面（xy 2D FFT + z 三对角）两条路径。

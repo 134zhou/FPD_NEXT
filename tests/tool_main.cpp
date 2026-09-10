@@ -10,9 +10,9 @@
 #include <string>
 #include <vector>
 
-#include "./include/IOBin.h"
-#include "./include/Config.h"
-#include "./include/Potential.h"
+#include "IOBin.h"
+#include "Config.h"
+#include "Potential.h"
 
 static void usage()
 {

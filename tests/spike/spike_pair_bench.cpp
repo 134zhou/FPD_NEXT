@@ -18,7 +18,7 @@
 //           GPU 版逐位不可复现 → 必须选 CPU（方案 A）。
 //
 // 编译：
-//   nvc++ -acc -O3 -Isrc/include -Minfo=accel spike/spike_pair_bench.cpp -o build/spike_pair
+//   nvc++ -acc -O3 -Isrc/include -Minfo=accel tests/spike/spike_pair_bench.cpp -o build/spike_pair
 //   ./build/spike_pair
 
 #include <cstdio>

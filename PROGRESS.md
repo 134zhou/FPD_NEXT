@@ -42,7 +42,7 @@
 
 ### spike — 前置风险验证
 
-`spike/spike_template_routine.cpp` 在动核心代码前验证了三件事：
+`tests/spike/spike_template_routine.cpp` 在动核心代码前验证了三件事：
 
 1. `#pragma acc routine seq` 作用于**模板函数**在 nvc++ 26.3 下可行，
    `-Minfo=accel` 确认 `stencil_point<(Loc)1..3>` 生成了 device routine。**不需要退化成宏**
@@ -117,7 +117,7 @@ dt 扫描（各档总物理时间相同 T=600）：
 
 ### 常量表 + 测试 3B — 粒子能量均分
 
-**新增** `src/Analysis.{h,cpp}`：`compute_fpd_constants`（含 4³ 亚格点扫描）、
+**新增** `tests/Analysis.{h,cpp}`：`compute_fpd_constants`（含 4³ 亚格点扫描）、
 `equipartition_target`、`blocking_analysis` / `pick_plateau`（分块平均）。
 **新增** `main.cpp` 的 `--lambda` 和 `--equipart <ghost|frozen|moving>` 两个模式。
 
@@ -183,7 +183,7 @@ dt 扫描（各档总物理时间相同 T=600）：
 ### Phase 2 — 配置 + 二进制 IO + 断点重启
 
 **新增**：`src/Config.{h,cpp}`（key=value 解析，解析/覆盖/dump 共用同一张字段表）、
-`src/IOBin.{h,cpp}`（`.fpd` 格式）、`src/tool_main.cpp`（`fpd_tool`）、
+`src/IOBin.{h,cpp}`（`.fpd` 格式）、`tests/tool_main.cpp`（`fpd_tool`）、
 `tools/fpd_format.py`、`tools/make_init.py`、`tools/fpd2vtk.py`、`tools/verify_vtk.py`。
 **删除**：`src/IO.cpp` + `IO.h`（ASCII VTK 整个移除）。
 **CMake**：拆 `fpd_core` 静态库 + `fpd` + `fpd_tool`。
@@ -218,7 +218,7 @@ dt 扫描（各档总物理时间相同 T=600）：
 已验证不同 slot 之间零共同值、互相关 ~1/√n（统计独立），且同一 offset 逐位可复现。
 于是重启无需恢复任何 RNG 内部状态，只需 seed 相同 —— 逐位相等是构造上保证的。
 
-证据：`spike/spike_rng_offset.cpp`、`spike_rng_slice.cpp`、`spike_rng_advance.cpp`。
+证据：`tests/spike/spike_rng_offset.cpp`、`spike_rng_slice.cpp`、`spike_rng_advance.cpp`。
 
 #### 顺手拆掉的三个地雷
 
@@ -259,7 +259,7 @@ Phase 4/5 的共同前置（Phase 4 要加 VAF/MSD 分析路径，不能再往 9
 | `FpdState` | `src/State.{h,cpp}` | 4 份分配/映射/释放样板收成 1 份，`require()` 把 present 遗漏从「跑出垃圾数」变成「启动即 abort」 |
 | 势函数 | `src/include/Potential.h` + `src/Potential.cpp` | WCA/Morse/LJ126 + none；WCA 不是独立分支（≡ LJ + 派生 rcut + 移位）；pair_energy 与 pair_force 两份独立实现 |
 | 外场 | `Config.h` 的 `gravity_x/y/z` + `gravity_compensate` | 背景力密度 bg=−ΣF/size 抵消 k=0 漂移 |
-| 自检拆分 | `src/CheckMain/CheckStencil/CheckNoise/CheckPotential.cpp` | 独立可执行 `fpd_check`，`fpd` 旧命令打印迁移提示 |
+| 自检拆分 | `tests/CheckMain/CheckStencil/CheckNoise/CheckPotential.cpp` | 独立可执行 `fpd_check`，`fpd` 旧命令打印迁移提示 |
 | RNG 统一 | — | 3A/3B 从 XORWOW 改 Philox（与生产一致，CMakeLists 注释早已要求） |
 | 判据 J1-J7 | — | 见下 |
 
@@ -303,7 +303,7 @@ Phase 7 要做的 z 向无滑移壁面，挡在最前面的是 `Stokes.cpp` 的�
 | 求解器 | `src/Poisson.{h,cpp}` | `solve_pressure` 按 `cfg.wall_z` 分派：周期 3D FFT（算术与 Stokes.cpp 一致）/ 壁面 xy 2D 批量 FFT + z 向 Thomas；`build_tridiag_coeffs` 预算前推系数 |
 | 配置 | `Common.h` 的 `NS_Config` 加 `wall_z` | 默认 0，`make_ns_config` 加默认参数，现有 4 处调用点零改动 |
 | 接线 | `State.{h,cpp}` | `tri_w` 数组 + `plan_xy` 句柄（`cufftPlanMany` batch=Nz） |
-| 判据 | `src/CheckPoisson.cpp` | `--check-tridiag`（纯 CPU）/ `--check-poisson`（需 GPU） |
+| 判据 | `tests/CheckPoisson.cpp` | `--check-tridiag`（纯 CPU）/ `--check-poisson`（需 GPU） |
 | 文档 | `doc/PressurePoisson.md` | 从离散 MAC 网格起的完整推导 + 实测数值 |
 
 **关键设计**（详见文档）：Neumann 边界**不是假设**，而是从「壁面法向面不修正」导出；
@@ -344,7 +344,7 @@ S0 修 `--check-poisson` 丢弃返回值的 bug → S1 抽取 `solve_pressure`�
 | 边数组加层 | `src/State.cpp` / `Viscosity.cpp` | `etaYZ`/`etaZX`/`pi_nx`/`pi_ny` 开 `Nz+1` 层 |
 | 配置 | `src/Config.cpp` | `boundary_z = periodic\|noslip`；`gravity_compensate` 默认 `-1`(auto) |
 | 格式 | `IOBin.h` / `tools/fpd_format.py` | `FPD_FLAG_WALL_Z`，载入时与配置不符即报错 |
-| 判据 | `src/CheckWall.cpp`（新） | `--check-wall`：W1/W2/W3/W4/W6/W5'a/W5b |
+| 判据 | `tests/CheckWall.cpp`（新） | `--check-wall`：W1/W2/W3/W4/W6/W5'a/W5b |
 
 **四个新推导**（文档层面此前完全空白，全部写进 `doc/PressurePoisson.md` §14）：
 
@@ -534,6 +534,8 @@ a/L=0.05 时 Hasimoto 有限尺寸修正是 **14% 偏差**，远大于要验证�
 ## 提交历史
 
 ```
+ab5cd83  整理: 把全部测试用代码从 src/ 迁到 tests/ (src/ 只剩生产代码)
+cbb84a6  Phase 7-B S6b: 文档收尾 (PressurePoisson §14 + README/PROGRESS/CLAUDE + 四份推导笔记入库)
 c6a8e8f  Phase 7-B S6a: 壁面能量均分判据 (W5) + FDT 矩阵恒等式 (W5'a)
 704ee1a  Phase 7-B S5: 粒子侧 z 向处理 (不折叠 + 越界中止)
 8ab23c1  修模板盒少一格的缺陷 (Phase 7-B 中发现, 先于壁面存在)
@@ -558,18 +560,28 @@ ae13f10  Phase 0: 基线固化 - README 记录缺陷清单, spike 验证模板 r
 ## 文件地图
 
 ```
-src/            Stencil.h(交错网格唯一真值源) Wall.h(z 向边界唯一真值源) Common.h(POD+工厂) Check.h
-                Stokes/Viscosity/Force/Velocity(物理)  Analysis(常量表+分块平均)
-                Config(key=value) IOBin(.fpd) State(分配/映射/释放唯一持有者)
-                Potential(势函数+最小镜像+力装配)  Poisson(压力泊松: 周期 3D FFT / 壁面 2D FFT+Thomas)
-                Tests.h(自检声明)
-                main.cpp(生产)  CheckMain/CheckStencil/CheckNoise/CheckPotential/CheckPoisson/CheckWall.cpp(fpd_check)
-                tool_main.cpp(fpd_tool)
+src/            生产代码（只此一处）
+  include/      Stencil.h(交错网格唯一真值源) Wall.h(z 向边界唯一真值源)
+                Common.h(POD+工厂) Check.h
+                Stokes/Viscosity/Force/Velocity(物理)  Config(key=value)
+                IOBin(.fpd)  State(分配/映射/释放唯一持有者)
+                Potential(势函数+最小镜像+力装配)  Poisson(压力泊松)
+  main.cpp      fpd 生产入口
+tests/          全部验证与测试代码
+  CheckMain/CheckStencil/CheckNoise/CheckPotential/CheckPoisson/CheckWall.cpp
+                → fpd_check
+  Analysis.{h,cpp}  常量表 + 分块平均（只被 fpd_check 用）
+  Tests.h       自检函数声明
+  tool_main.cpp fpd_tool（纯 CPU：dump-ckpt / diff-ckpt / verify-forces）
+  spike/        一次性前置风险验证程序（不参与构建，各自单独编译）
 tools/          fpd_format.py(格式镜像) make_init.py(纯stdlib) fpd2vtk.py verify_vtk.py(pvpython)
-spike/          template_routine(模板+routine seq) stencil_box(模板盒漏点, 纯 py) rng_offset/rng_slice/rng_advance(RNG 语义)
-                state_map(映射机制) pair_bench(力算 GPU 判决) potential_ref(黄金表)
-                fft2d_batch(2D 批量 FFT 轴序/归一化) tridiag(Thomas vs 稠密 Gauss + 定规)
 config/         smoke.cfg production.cfg
 baseline/       各阶段实验日志与参考轨迹
-doc/            PressurePoisson.md(泊松数学推导，与 Poisson.cpp 共同定义算子)  old_code/(仅供参考)
+doc/            PressurePoisson.md(泊松+壁面数学推导, 与 Poisson.cpp/Wall.h 共同定义算子)
+                old_code/(仅供参考)
 ```
+
+> **构建布局**：`fpd_core` 静态库里**只有生产代码**（src/）—— 验证代码不进去，
+> 否则「验证与生产走同一条代码路径」这个保证就反过来了。
+> `tests/` 自检代码直接编译进 `fpd_check` / `fpd_tool`，与 `fpd` 共用同一个 `fpd_core`。
+

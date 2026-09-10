@@ -4,13 +4,13 @@
 #include <algorithm>
 #include <openacc.h>
 
-#include "./include/State.h"
-#include "./include/Stokes.h"
-#include "./include/Viscosity.h"
-#include "./include/Force.h"
-#include "./include/Velocity.h"
-#include "./include/Tests.h"
-#include "./include/Analysis.h"
+#include "State.h"
+#include "Stokes.h"
+#include "Viscosity.h"
+#include "Force.h"
+#include "Velocity.h"
+#include "Tests.h"
+#include "Analysis.h"
 
 // ============================================================================
 // z 向无滑移壁面的端到端判据（Phase 7-B）。

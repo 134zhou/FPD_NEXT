@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------
 // 【逐位重启的关键】随机数流的位置由 step 直接算出，不做任何累计记账。
 //
-// 实测结论（spike/spike_rng_offset.cpp、spike_rng_slice.cpp、spike_rng_advance.cpp）：
+// 实测结论（tests/spike/spike_rng_offset.cpp、spike_rng_slice.cpp、spike_rng_advance.cpp）：
 //   1. 只有 CURAND_RNG_PSEUDO_PHILOX4_32_10 支持有意义的 setGeneratorOffset；
 //      XORWOW（原 CURAND_RNG_PSEUDO_DEFAULT）和 MRG32K3A 都对不上，无法逐位重启
 //   2. 「生成 n 个数后序列前进 n」这个模型是【错的】：offset=1*n 能对上第 2 批，

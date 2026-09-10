@@ -5,7 +5,7 @@
 //
 // 本 spike 直接测出换算系数：连续生成 M 个 vs 从 offset 处生成后半段，比对是否逐位相同。
 //
-// 编译：nvc++ -acc -cuda -cudalib=curand -O2 spike/spike_rng_offset.cpp -o build/spike_rng
+// 编译：nvc++ -acc -cuda -cudalib=curand -O2 tests/spike/spike_rng_offset.cpp -o build/spike_rng
 #include <cstdio>
 #include <cstring>
 #include <vector>

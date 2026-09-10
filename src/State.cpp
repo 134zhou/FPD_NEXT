@@ -1,10 +1,10 @@
-#include "./include/State.h"
+#include "State.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <openacc.h>
-#include "./include/Check.h"
-#include "./include/Poisson.h"
+#include "Check.h"
+#include "Poisson.h"
 
 // 运行时 API 的映射建立/删除（S0-A spike 已验证这些映射能被 present() 认账）。
 // 注意字节数一律用 (size_t) 显式转换，size*sizeof(double) 是 size_t 运算。

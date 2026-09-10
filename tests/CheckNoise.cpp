@@ -5,15 +5,15 @@
 #include <chrono>
 #include <cstdio>
 
-#include "./include/Tests.h"
-#include "./include/Stencil.h"
-#include "./include/Check.h"
-#include "./include/Analysis.h"
-#include "./include/Force.h"
-#include "./include/Viscosity.h"
-#include "./include/Velocity.h"
-#include "./include/Stokes.h"
-#include "./include/State.h"
+#include "Tests.h"
+#include "Stencil.h"
+#include "Check.h"
+#include "Analysis.h"
+#include "Force.h"
+#include "Viscosity.h"
+#include "Velocity.h"
+#include "Stokes.h"
+#include "State.h"
 
 // ============================================================================
 // 测试 3A：纯流体噪声谱（无粒子）
