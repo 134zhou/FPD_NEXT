@@ -14,6 +14,7 @@ cmake -B build && cmake --build build -j     # nvc++ 26.3 + CUDA 13.1 + CMake 4.
 ./build/fpd config/smoke.cfg [--set k=v ...]  # 生产运行；--set 覆盖配置项
 ./build/fpd_check --check                     # 自检：力守恒 / 亚格点 / 混叠 / N=2 重叠 / 力链路
 ./build/fpd_check --check-potential           # 势函数自检（纯 CPU，无卡可跑）
+./build/fpd_check --check-wall                # z 向壁面 W1–W6 + W5'a/W5b（需 GPU）
 ./build/fpd_check --lambda [L]                # 常量表 λ^T, M_i（纯 CPU，秒级）
 ./build/fpd_check --noise [L] [dt] [kT] [steps]   # 测试 3A：纯流体噪声谱
 ./build/fpd_check --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]   # 测试 3B
@@ -113,7 +114,9 @@ Phase 4 的 L=192 立方盒是 27 倍网格量。检查点写入 3.9 ms/次，�
 
 - **力守恒判据对 `stencil_point` 的内部公式错误是盲的** —— 投影和归一化会一起错，
   `Σf == F` 照样成立。需要独立数值对照，见 `spike/spike_template_routine.cpp`
-  （用独立写的 Python 复核过 `∫φ = 170.3051225223`）。
+  （用独立写的 Python 复核过 `∫φ`）。⚠️ 那份 Python 参考**当时复制了同一个模板盒
+  尺寸**，所以两处一起错、没能发现模板盒缺陷（Phase 7-B 才发现，见约束 1）。
+  **共享假设的参考实现不是独立参考** —— 真正的判决者是连续球坐标积分与暴力枚举。
 - **单粒子测试对一整类缺陷是盲的** —— C2 在 N=1 时数学上恰好抵消，骗过了 20 万步模拟。
   **任何涉及相场加权的改动，都必须补 N=2 重叠粒子的用例。**
   判决性判据：均匀流场 `v ≡ 1` 下 `V_i` 必须精确等于 1，与重叠无关。
@@ -150,6 +153,25 @@ vector-reduction-over-j，零 atomic），求和顺序在固定 N 与固定 gang
 同步更新文档 §12 的公式 ↔ 代码对照表，并重跑 `./build/fpd_check --check-poisson`。
 归一化因子（周期 `size`、壁面 `Nx·Ny`）在 `solve_pressure` 里**只出现一次**，别散落。
 壁面 `(0,0)` 奇异列用 `d_0 -= 1` 定规，**不许整列清零**（那会删掉支撑粒子重量的静压）。
+
+### 8. `Wall.h` 是 z 向边界访问的唯一真值源
+
+`src/include/Wall.h` 是**唯一**实现 z 向邻居访问、壁面 ghost、棱边存储映射、
+壁面噪声因子的地方（Phase 7-B 引入的新漂移点，与 `Stencil.h`、`Poisson.cpp`
+是同一类风险）。
+
+**不要在 `Stokes.cpp` 里重新手写 `k` 或 `k-1` 的 z 向访问。** 逻辑 `k` 的物理含义
+在周期/壁面两种模式下完全相同，只有存储映射不同 —— 手写一次就破坏这个不变量。
+
+改完 `Wall.h` / `Stokes.cpp` / `Viscosity.cpp` 后**必须**跑
+`./build/fpd_check --check-wall`（含 W1/W2/W3/W4/W6/W5），并同步
+`doc/PressurePoisson.md` §14（公式 ↔ 代码对照表在那里）。
+
+几个不能忘的数：
+- 壁面剪切噪声因子 **γ=2（幅度 ×√2）**，只有 `EDGE_YZ`/`EDGE_ZX` 的两片壁面棱边需要。
+  `Π_zz` 与 `Π_xy` **不需要**。推导见 §14.3，判据 W5b 用 γ≡1 对照证明它被数据选中
+- `dim = n_v − size + 1`（能量均分的目标 `⟨Σ|v|²⟩ = kT·dim`），周期/壁面通用
+- 棱边数组在壁面模式下是 `Nx·Ny·(Nz+1)`
 
 ## 代码约定
 
@@ -220,14 +242,15 @@ pot_alpha/pot_r_eq/pot_rcut/pot_shift`。
 
 ## 当前进度（详见 `PROGRESS.md`）
 
-Phase 0/1/2/3/5 完成，**Phase 7-A 完成**。流体求解器、交错网格封装、噪声标定
-（3A + 3B）、配置系统、逐位断点重启、**粒子间相互作用力（WCA/Morse/LJ126 + 外场）**、
-**z 向壁面压力泊松求解器（xy 2D FFT + z 向 Thomas，`src/Poisson.cpp`）**均已通过
-数值判据。`FpdState` 已实现，自检拆成独立可执行 `fpd_check`。
+Phase 0/1/2/3/5 完成，**Phase 7 完成**（7-A 求解器 + 7-B 接线）。流体求解器、
+交错网格封装、噪声标定（3A + 3B）、配置系统、逐位断点重启、
+**粒子间相互作用力（WCA/Morse/LJ126 + 外场）**、
+**z 向无滑移壁面（`boundary_z = noslip`：切向 ghost + 壁面剪切噪声 ×√2 +
+相场按 `Loc` 截断 + 棱边数组 Nz+1 层）**均已通过数值判据。
+`FpdState` 已实现，自检拆成独立可执行 `fpd_check`。
 
-下一步是 Phase 4（Stokes 阻力 + VAF/MSD），无阻塞项。Phase 7 剩余部分是 **7-B
-接线**（把壁面 BC 接进 `Stokes.cpp`，显式 `v*` 重构 + `Wall.h` + 相场壁面截断 +
-粒子侧壁面势），求解器已就绪待接线。
+**下一步是 Phase 6（生产算例 + 旧代码对照）或 Phase 4（L 外推）**，无阻塞项。
+Phase 7-B 明确**未做**粒子-壁面排斥势（粒子靠初始构型远离壁面，越界报错中止）。
 
 ## 工作方式
 

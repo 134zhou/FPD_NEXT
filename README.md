@@ -77,7 +77,8 @@ $PV/bin/pvpython tools/fpd2vtk.py out/prod_*.fpd -o vis/
 | λ^T / M_i 常量表 | ✅ `--lambda`，三种独立方法交叉验证 |
 | 配置文件 / checkpoint | ✅ Phase 2 完成，重启逐位复现 |
 | 可视化 | ✅ `tools/fpd2vtk.py` 离线转 VTK（ParaView 开一个 .pvd） |
-| z 向壁面泊松求解器 | ✅ xy 2D FFT + z 向 Thomas，通过算子往返判据（未接线） |
+| z 向壁面泊松求解器 | ✅ xy 2D FFT + z 向 Thomas，通过算子往返判据 |
+| **z 向无滑移壁面（Phase 7）** | ✅ **已接线到生产路径**，W1–W9 判据全绿 |
 | 定量验证 | ❌ 未做 |
 
 ### 性能
@@ -105,7 +106,18 @@ z 向无滑移壁面的压力泊松求解器（`src/Poisson.{h,cpp}`，`wall_z=1
 批量 2D FFT + 逐 `(kx,ky)` 在 z 向解三对角（Thomas），并通过「手写 `div∘grad` 算子
 作用出右端 → 求解器还原」的往返判据（`./build/fpd_check --check-poisson`）。完整数学
 推导见 **`doc/PressurePoisson.md`**；其中 Neumann 边界是从「壁面法向面不修正」导出的
-结论，不是假设。该求解器尚未接线到 `Stokes.cpp`（Phase 7-B）。
+结论，不是假设。
+
+**Phase 7-B 已把它接线到生产路径**：`boundary_z = noslip` 开壁面（x/y 仍周期），
+切向无滑移走 ghost、壁面剪切噪声 ×√2、相场在壁面按 `Loc` 截断。
+新判据 `./build/fpd_check --check-wall`（W1/W2/W3/W4/W6）与 `--check-wall` 内的
+W5（能量均分 + γ≡1 对照）。z 向访问的唯一真值源是 `src/include/Wall.h`。
+
+```bash
+# 壁面构型（粒子离两壁 >= range）
+python3 tools/make_init.py --grid 32 32 32 --single --wall-z -o out/wall.fpd
+./build/fpd config/smoke.cfg --set boundary_z=noslip --set init_file=out/wall.fpd
+```
 
 ## 缺陷清单（历史记录）
 
@@ -236,8 +248,10 @@ gravity_z = -10  gravity_compensate = 1
 - **参数查表**：`validate_config` 检查「用不到的势参数报错、需要的必须给」，不给默认值
   兜底。Morse 宽度参数叫 `pot_alpha` 不叫 `a`（`a` 是粒子半径）。
 - **外场**：均匀外场下 `Σ_n F = N·g ≠ 0`，流体 k=0 被线性加速、整盒漂移，
-  `gravity_compensate`（默认 1）叠加背景力密度 `bg = −ΣF/size` 抵消它。
-  **z 向无滑移壁面（Phase 7）上线后此开关默认转 0**。
+  `gravity_compensate` 叠加背景力密度 `bg = −ΣF/size` 抵消它。
+  默认值是 **`-1`（auto）**：`periodic` → 1，`noslip` → 0（壁面已提供真实动量汇）。
+  `boundary_z=noslip` 时**显式**写 `gravity_compensate=1` 会直接报错退出
+  （双重扣除），不静默改成 0 —— auto 的解析结果在启动日志里显式打印。
 - **势参数不进 `.fpd` header**（Python 侧用不到）；自洽性由
   `fpd_tool --verify-forces <ckpt> <config.used>` 判据兜底。
 
@@ -257,8 +271,9 @@ J6 势特征点 + POT_NONE 零判据 + 标号交换对称性
 ## 自检
 
 ```bash
-./build/fpd_check --check     # 力守恒 + 亚格点不变性 + 多粒子重叠 + 力链路
+./build/fpd_check --check             # 力守恒 + 亚格点不变性 + 多粒子重叠 + 力链路
 ./build/fpd_check --check-potential   # 势函数自检（纯 CPU，无卡可跑）
+./build/fpd_check --check-wall        # z 向壁面判据 W1/W2/W3/W4/W6/W5'a/W5b（需 GPU）
 ```
 
 **每次改动 `Stencil.h` / `Viscosity` / `Force` / `Velocity` 后都必须重跑**，
@@ -285,6 +300,49 @@ eta_max 分离 49.85 ≈ 50（C3 修复前是 ~50.85）；重叠 90.5
 >
 > 重叠时 `eta_max = 90.5 > η_c = 50` 是 FPD 的**已知行为**（重叠区 `Σφ > 1`），
 > 文献按字面写成求和，未做 clamp。有硬核排斥时很少发生。
+
+## z 向无滑移壁面（Phase 7，已完成）
+
+`boundary_z = periodic`（默认，全周期）| `noslip`（z 上下无滑移硬壁，x/y 仍周期）。
+z 向访问的**唯一真值源**是 `src/include/Wall.h`；完整推导见 `doc/PressurePoisson.md` §14。
+
+### 三个非显然的设计点
+
+- **切向无滑移用 ghost**：`vx[-1] = -vx[0]`、`vx[Nz] = -vx[Nz-1]`，`vz` 两壁恒 0。
+  代入 K1 既有公式后，壁面棱边的**两个对流因子同时为 0**（物理正确：壁面不输运动量），
+  粘性项自动给出 `±2vx`。所以 K1 不需要壁面特例分支
+- **棱边数组多一层**：`Π_yz`/`Π_zx` 在 `z=∓1/2` 的两片壁面都是**壁面剪切应力**，
+  而 `k=-1` 与 `k=Nz-1` 在 Nz 层布局下会**撞同一个槽位**。故壁面模式开 `Nz+1` 层。
+  逻辑 `k` 的物理含义两种模式完全相同，**只有存储映射不同** —— 这是避开
+  「整体重编号」静默漂移的关键
+- **壁面剪切噪声 ×√2**（推导见 §14.3）。离散涨落耗散要求 `γ·w² = w`，壁面棱边
+  控制体只有内部的一半 ⇒ `w = 1/2` ⇒ `γ = 2`。漏掉不报错，只会让壁面附近 kT 偏低
+
+### 判据（`--check-wall`）
+
+```
+W1  max|div v|/max|v| = 3.4e-16  含 k=0 与 k=Nz-1 两个壁面层（7-A 盲区 1 的正解）
+W2  vz[:,:,Nz-1] 逐位为 0
+W3  平面 Poiseuille 与【精确离散】闭式 vx[k]=(g/2η)[(Nz²+1)/4−(k−(Nz−1)/2)²]
+    的相对差 = 0.000e+00 —— 判决性判死 ghost 因子 2 与散度端系数 1
+W4  力守恒 ≤5.3e-15（远离壁/贴下壁/贴上壁/N=2 重叠）；均匀流场 V_i = 0.000e+00
+W4s 上下壁离散镜像位置上 sum_phiz/sum_phix 逐个数字相等 = 0.000e+00
+W6  z 向动量收支恒等式逐步成立，相对偏差 1.3e-15
+W5b 能量均分：γ=2 → 0.9750±0.0029，γ≡1 → 0.9427±0.0028，差 8.0σ
+W7  壁面模式逐位重启（5 步 vs 2+3 步）全部逐位相同
+W9  周期回归：与壁面改动前逐位相同
+```
+
+> ⚠️ **W3 为什么必须用离散闭式**：连续抛物线 `(g/2)(Nz²/4−z²)` 带 `O(1/Nz²)` 的
+> 假偏差（Nz=16 时 0.39%），足以让人误判 ghost 写错了。
+>
+> ⚠️ **W5b 是差分判据**：绝对比值没到 1.000（壁面 0.975），但**周期控制也落在 0.983**
+> —— 那是这台小盒子量测机器自身的 ~1.7% 系统偏差（`dim` 的冻结模式约定 + 显式 Euler
+> 的 O(dt) 偏差），与壁面无关。所以判据写成：γ=2 必须显著比 γ=1 更接近 1，且壁面与
+> 周期控制的系统偏差同量级。绝对一致需要更大盒子 + dt 外推，见 `PROGRESS.md` 遗留问题。
+>
+> 📌 **W4s 抓出了模板盒缺陷**：上下壁走不同代码路径（下壁棱边是逻辑 `k=-1` 的额外
+> 一层），只测一侧的判据对它完全盲。详见上面「模板盒少一格」。
 
 ## 噪声标定（测试 3A，已完成）
 
