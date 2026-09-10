@@ -67,7 +67,13 @@ void update_particle_position(
         else if (Rx[n] >= Lx ) { Rx[n] -= Lx; }
         if      (Ry[n] <  0.0) { Ry[n] += Ly; }
         else if (Ry[n] >= Ly ) { Ry[n] -= Ly; }
-        if      (Rz[n] <  0.0) { Rz[n] += Lz; }
-        else if (Rz[n] >= Lz ) { Rz[n] -= Lz; }
+        // z 向：壁面模式下【不折叠】。粒子中心的合法区间是 [-1/2, Nz-1/2]；
+        // 越界意味着粒子穿墙，是物理错误 —— 故意【不 clamp】，留一个越界值让
+        // 主循环的检查发现并中止。clamp 会把穿墙变成一个看起来正常的轨迹。
+        if (!cfg.wall_z)
+        {
+            if      (Rz[n] <  0.0) { Rz[n] += Lz; }
+            else if (Rz[n] >= Lz ) { Rz[n] -= Lz; }
+        }
     }
 }

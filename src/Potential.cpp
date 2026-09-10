@@ -39,7 +39,8 @@ void compute_particle_forces(NS_Config cfg, PotentialParams pot, ExternalField e
                              const double* Rx, const double* Ry, const double* Rz,
                              double* Fx, double* Fy, double* Fz)
 {
-    const double Lx = (double)cfg.Nx, Ly = (double)cfg.Ny, Lz = (double)cfg.Nz;
+    const double Lx = (double)cfg.Nx, Ly = (double)cfg.Ny;
+    const double Lz = pbc_length_z(cfg);   // 壁面模式下退化为恒等映射（z 不折叠）
 
     // 全矩阵 + gang/vector reduction（零 atomic）：每个粒子 i 由一个 gang 独立
     // 归约它对所有 j 的力。算两倍的对（j<i 和 j>i 各一次），在 GPU 上不值一提，
@@ -72,7 +73,8 @@ void compute_particle_forces_cpu(NS_Config cfg, PotentialParams pot, ExternalFie
                                  const double* Rx, const double* Ry, const double* Rz,
                                  double* Fx, double* Fy, double* Fz)
 {
-    const double Lx = (double)cfg.Nx, Ly = (double)cfg.Ny, Lz = (double)cfg.Nz;
+    const double Lx = (double)cfg.Nx, Ly = (double)cfg.Ny;
+    const double Lz = pbc_length_z(cfg);   // 壁面模式下退化为恒等映射（z 不折叠）
 
     for (int n = 0; n < N; n++) { Fx[n] = ext.gx; Fy[n] = ext.gy; Fz[n] = ext.gz; }
     for (int i = 0; i < N; i++)

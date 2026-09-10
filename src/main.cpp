@@ -184,6 +184,28 @@ static int run_production(const FpdConfig& c)
     };
     const CkptWriter writer{c, h, st};
 
+    // 壁面模式下的粒子越界检查。只在已经 download 过 ST_PARTICLE 的地方调用 ——
+    // 不做每步的 device→host 同步（那会把 GPU 流水线打断）。
+    // ⚠️ 代价是检测延迟到下一个检查点/日志间隔。本轮不做壁面排斥势，粒子靠初始
+    //    构型远离壁面（make_init.py --wall-margin）；等将来加了壁面势，粒子会在
+    //    碰到壁之前被弹回，这个检查退化成纯保险。
+    auto check_wall_bounds = [&](long step) -> bool
+    {
+        if (!cfg.wall_z) { return false; }
+        const double zlo = -0.5, zhi = (double)cfg.Nz - 0.5;
+        for (int n = 0; n < N; n++)
+        {
+            if (st.Rz[n] < zlo || st.Rz[n] > zhi)
+            {
+                std::cerr << "错误: step " << step << " 粒子 " << n
+                          << " 的 Rz = " << st.Rz[n] << " 越出壁面 [" << zlo
+                          << ", " << zhi << "]，粒子穿墙。中止（不 clamp）\n";
+                return true;
+            }
+        }
+        return false;
+    };
+
     for (long step = start_step; step < c.n_steps; step++)
     {
         // 力：用当前 device 上的 R 算 F（GPU 全程 device，无 host 往返）。
@@ -196,6 +218,7 @@ static int run_production(const FpdConfig& c)
             // 拉全检查点需要的数组（含 Fx/Fy/Fz —— 原来漏过，力恒 0 时无害，
             // 加粒子间力后会写出陈旧主机端零值；现在一步拉全，不再有遗漏）
             st.download(ST_VELOCITY | ST_PARTICLE);
+            if (check_wall_bounds(step)) { writer.write(step); rc = 3; break; }
             if (!writer.write(step)) { rc = 2; break; }
         }
 
@@ -206,6 +229,7 @@ static int run_production(const FpdConfig& c)
             for (int i = 0; i < size; i++)
             { if (!std::isfinite(st.vx[i])) { bad = true; break; } }
             if (!std::isfinite(st.Rx[0])) { bad = true; }
+            if (check_wall_bounds(step)) { bad = true; }
 
             const double el = std::chrono::duration<double>(
                                   std::chrono::steady_clock::now() - t_start).count();
@@ -258,7 +282,11 @@ static int run_production(const FpdConfig& c)
 
     st.finish();
 
-    std::cout << (rc == 0 ? "完成" : (rc == 3 ? "因发散中止（已落盘）" : "因错误中止")) << std::endl;
+    // rc=3 是「物理上不该发生的事」：NaN/Inf 发散，或壁面模式下粒子穿墙。
+    // 具体原因已经在上面的错误行里打印过，这里不再猜。
+    std::cout << (rc == 0 ? "完成"
+                          : (rc == 3 ? "中止（NaN/发散或粒子穿墙，已落盘）"
+                                     : "因错误中止")) << std::endl;
     return rc;
 }
 

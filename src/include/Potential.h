@@ -55,6 +55,17 @@ static inline double min_image(double d, double L)
     return d;
 }
 
+// z 向是否周期。壁面模式下最小镜像【不作用于 z】。
+//
+// 实现上不新增分支到 O(N²) 内层：调用方把 Lz 传成一个足够大的数（1e300），
+// min_image 就自动退化为恒等映射（0.5*1e300 不溢出，且 |d| 永远小于它）。
+// 这样「最小镜像只有一份实现」这条不变量（PROGRESS.md 的关键决策）得以保住。
+#pragma acc routine seq
+static inline double pbc_length_z(NS_Config cfg)
+{
+    return cfg.wall_z ? 1.0e300 : (double)cfg.Nz;
+}
+
 // ---------------------------------------------------------------------------
 // 裸势 / 裸力（无截断、无移位）。g_bare(r) = -U'_bare(r) / r，
 // 调用点 F_i = g * (R_i - R_j)。g > 0 表示排斥。
