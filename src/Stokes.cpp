@@ -27,6 +27,8 @@ void step_navier_stokes
     double DT = cfg.dt;
     const int wz   = cfg.wall_z;      // 0 = 周期，1 = z 向无滑移壁面
     const int esize = wz_edge_size(cfg);   // 棱边数组元素数（壁面模式是 Nz+1 层）
+    // 对流开关：生产恒为 1。乘 1.0 是精确运算，所以默认路径逐位不变。
+    const double ADV = (double)cfg.adv_on;
 
     // --- 1. 生成随机噪声 (Σ 项) ---
     // randD: 0,1,2 对应 xx, yy, zz 方向（体心，size 个）；randN: 0,1,2 对应 xy, yz, zx
@@ -39,12 +41,17 @@ void step_navier_stokes
     const unsigned long long slotN = wz_rand_slot_n(cfg);
     const unsigned long long base  = (unsigned long long)step * (slotD + slotN);
 
-    #pragma acc host_data use_device(randD, randN)
+    // noise_skip=1 时跳过生成，直接用 randD/randN 的现值 —— 供 FDT 判据逐个注入
+    // 单位噪声向量（判据专用，生产路径恒为 0，且此时算术表达式逐位不变）。
+    if (!cfg.noise_skip)
     {
-        CURAND_CHECK(curandSetGeneratorOffset(gen, base));
-        CURAND_CHECK(curandGenerateNormalDouble(gen, randD, (int)slotD, 0.0, 1.0));
-        CURAND_CHECK(curandSetGeneratorOffset(gen, base + slotD));
-        CURAND_CHECK(curandGenerateNormalDouble(gen, randN, (int)slotN, 0.0, 1.0));
+        #pragma acc host_data use_device(randD, randN)
+        {
+            CURAND_CHECK(curandSetGeneratorOffset(gen, base));
+            CURAND_CHECK(curandGenerateNormalDouble(gen, randD, (int)slotD, 0.0, 1.0));
+            CURAND_CHECK(curandSetGeneratorOffset(gen, base + slotD));
+            CURAND_CHECK(curandGenerateNormalDouble(gen, randN, (int)slotN, 0.0, 1.0));
+        }
     }
 
     // --- 2. 计算总动量通量 Π = Advection - Viscosity - Noise ---
@@ -77,22 +84,22 @@ void step_navier_stokes
                     double vay = (vy[ijk] + vy[IDX(i, jm, k)]) * 0.5;
                     double vaz = (vz[ijk] + vz[IDX(i, j, km)]) * 0.5;
 
-                    pi_dx[ijk] = vax * vax; // Advection: v_i * v_j
+                    pi_dx[ijk] = ADV * vax * vax; // Advection: v_i * v_j
                     pi_dx[ijk] -= eta[ijk] * 2.0 * (vx[ijk] - vx[IDX(im, j, k)]); // Viscosity: 2*eta*Exx
                     pi_dx[ijk] -= sqrt(2.0 * eta[ijk]) * cfg.W * randD[0 * size + ijk]; // Noise: Σxx
 
-                    pi_dy[ijk] = vay * vay;
+                    pi_dy[ijk] = ADV * vay * vay;
                     pi_dy[ijk] -= eta[ijk] * 2.0 * (vy[ijk] - vy[IDX(i, jm, k)]);
                     pi_dy[ijk] -= sqrt(2.0 * eta[ijk]) * cfg.W * randD[1 * size + ijk];
 
-                    pi_dz[ijk] = vaz * vaz;
+                    pi_dz[ijk] = ADV * vaz * vaz;
                     pi_dz[ijk] -= eta[ijk] * 2.0 * (vz[ijk] - vz[IDX(i, j, km)]);
                     pi_dz[ijk] -= sqrt(2.0 * eta[ijk]) * cfg.W * randD[2 * size + ijk];
 
                     // Πxy (pi_nz): 位于 XY 面的棱边（体心层，不含 z 导数，控制体完整）
                     double vsx_y = (vx[ijk] + vx[IDX(i, jp, k)]) * 0.5;
                     double vsy_x = (vy[ijk] + vy[IDX(ip, j, k)]) * 0.5;
-                    pi_nz[ijk] = vsx_y * vsy_x; // 对流
+                    pi_nz[ijk] = ADV * vsx_y * vsy_x; // 对流
                     pi_nz[ijk] -= etaXY[ijk] * ((vx[IDX(i, jp, k)] - vx[ijk]) + (vy[IDX(ip, j, k)] - vy[ijk])); // 粘性
                     pi_nz[ijk] -= sqrt(etaXY[ijk]) * cfg.W * randN[0 * esize + ijk]; // 随机
                 }
@@ -110,7 +117,7 @@ void step_navier_stokes
                 // Πyz (pi_nx): 位于 YZ 面的棱边
                 double vsy_z = (wz_vy(cfg, vy, i, j, k) + wz_vy(cfg, vy, i, j, k + 1)) * 0.5;
                 double vsz_y = (wz_vz(cfg, vz, i, j, k) + wz_vz(cfg, vz, i, jp, k)) * 0.5;
-                pi_nx[eb] = vsy_z * vsz_y; // 对流
+                pi_nx[eb] = ADV * vsy_z * vsz_y; // 对流
                 pi_nx[eb] -= etaYZ[eb] * ((wz_vy(cfg, vy, i, j, k + 1) - wz_vy(cfg, vy, i, j, k))
                                         + (wz_vz(cfg, vz, i, jp, k) - wz_vz(cfg, vz, i, j, k))); // 粘性
                 pi_nx[eb] -= sqrt(etaYZ[eb] * gam) * cfg.W * randN[1 * esize + eb]; // 随机
@@ -118,7 +125,7 @@ void step_navier_stokes
                 // Πzx (pi_ny): 位于 ZX 面的棱边
                 double vsz_x = (wz_vz(cfg, vz, i, j, k) + wz_vz(cfg, vz, ip, j, k)) * 0.5;
                 double vsx_z = (wz_vx(cfg, vx, i, j, k) + wz_vx(cfg, vx, i, j, k + 1)) * 0.5;
-                pi_ny[eb] = vsz_x * vsx_z; // 对流
+                pi_ny[eb] = ADV * vsz_x * vsx_z; // 对流
                 pi_ny[eb] -= etaZX[eb] * ((wz_vz(cfg, vz, ip, j, k) - wz_vz(cfg, vz, i, j, k))
                                         + (wz_vx(cfg, vx, i, j, k + 1) - wz_vx(cfg, vx, i, j, k))); // 粘性
                 pi_ny[eb] -= sqrt(etaZX[eb] * gam) * cfg.W * randN[2 * esize + eb]; // 随机

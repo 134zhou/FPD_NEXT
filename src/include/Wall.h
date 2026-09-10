@@ -130,6 +130,7 @@ static inline double wz_vz(NS_Config cfg, const double* vz, int i, int j, int k)
 #pragma acc routine seq
 static inline double wz_noise_gamma(NS_Config cfg, int k)
 {
+    if (cfg.noise_gamma1) { return 1.0; }   // 判据对照用，见 Common.h
     return wz_edge_at_wall(cfg, k) ? 2.0 : 1.0;
 }
 
