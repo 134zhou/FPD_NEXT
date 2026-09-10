@@ -215,7 +215,8 @@ static int run_production(const FpdConfig& c)
         step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.fx, st.fy, st.fz,
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz, st.pi_nx, st.pi_ny, st.pi_nz,
-                           st.fft, st.plan, st.gen, st.randD, st.randN,
+                           st.fft, st.plan, st.plan_xy, st.tri_w, st.diag,
+                           st.gen, st.randD, st.randN,
                            st.tmp_fx, st.tmp_fy, st.tmp_fz, step);
         update_particle_velocity(cfg, pp, N, st.Rx, st.Ry, st.Rz,
                                  st.sum_phix, st.sum_phiy, st.sum_phiz,

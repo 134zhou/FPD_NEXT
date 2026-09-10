@@ -69,10 +69,12 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
         h_tmp_fx.assign(size, 0); h_tmp_fy.assign(size, 0); h_tmp_fz.assign(size, 0);
         h_fft.assign(size * 2, 0);
         h_randD.assign(size * 3, 0); h_randN.assign(size * 3, 0);
+        h_diag.assign(1, 0);
         pi_dx = h_pi_dx.data(); pi_dy = h_pi_dy.data(); pi_dz = h_pi_dz.data();
         pi_nx = h_pi_nx.data(); pi_ny = h_pi_ny.data(); pi_nz = h_pi_nz.data();
         tmp_fx = h_tmp_fx.data(); tmp_fy = h_tmp_fy.data(); tmp_fz = h_tmp_fz.data();
         fft = h_fft.data(); randD = h_randD.data(); randN = h_randN.data();
+        diag = h_diag.data();
 
         // 壁面模式：三对角前推系数（主机侧一次性预算，与右端无关）
         if (cfg.wall_z)
@@ -109,6 +111,7 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
         api_create(fft, size * 2 * sizeof(double));
         api_create(randD, size * 3 * sizeof(double));
         api_create(randN, size * 3 * sizeof(double));
+        api_create(diag, sizeof(double));       // 单元素诊断量，create 即可（求解器整体覆写）
         if (cfg.wall_z) { api_copyin(tri_w, nbSize); }
     }
 
@@ -140,6 +143,7 @@ void FpdState::finish()
     // 逆序 delete；acc_delete 幂等（不在 present 表时是 no-op）
     if (parts & ST_SOLVER)
     {
+        api_delete(diag, sizeof(double));
         api_delete(randN, size * 3 * sizeof(double));
         api_delete(randD, size * 3 * sizeof(double));
         api_delete(fft, size * 2 * sizeof(double));
@@ -214,7 +218,9 @@ void FpdState::download(unsigned bits)
     {
         api_down(vx, nbSize); api_down(vy, nbSize); api_down(vz, nbSize); api_down(p, nbSize);
     }
-    // ST_SOLVER 的临时场不下载（仅供 step_navier_stokes 内部使用）
+    // ST_SOLVER 的临时场不下载（仅供 step_navier_stokes 内部使用）；
+    // 例外是 diag：它是壁面相容性诊断量，生产运行要定期读回监控（判据 W8）。
+    if (bits & ST_SOLVER) { api_down(diag, sizeof(double)); }
 }
 
 void FpdState::upload(unsigned bits)

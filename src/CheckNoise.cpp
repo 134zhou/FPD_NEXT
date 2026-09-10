@@ -74,7 +74,8 @@ int run_noise_check(int L, double dt, double kT, long n_steps)
         step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.fx, st.fy, st.fz,
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz, st.pi_nx, st.pi_ny, st.pi_nz,
-                           st.fft, st.plan, st.gen, st.randD, st.randN,
+                           st.fft, st.plan, st.plan_xy, st.tri_w, st.diag,
+                           st.gen, st.randD, st.randN,
                            st.tmp_fx, st.tmp_fy, st.tmp_fz, step);
 
         // 平衡后每 100 步采一次样（去关联）
@@ -199,7 +200,8 @@ int run_equipartition_check(EquipartMode mode, int L, double dt, double kT,
         step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.fx, st.fy, st.fz,
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz, st.pi_nx, st.pi_ny, st.pi_nz,
-                           st.fft, st.plan, st.gen, st.randD, st.randN,
+                           st.fft, st.plan, st.plan_xy, st.tri_w, st.diag,
+                           st.gen, st.randD, st.randN,
                            st.tmp_fx, st.tmp_fy, st.tmp_fz, step);
         update_particle_velocity(cfg, pp, N, st.Rx, st.Ry, st.Rz,
                                  st.sum_phix, st.sum_phiy, st.sum_phiz,

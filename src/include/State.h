@@ -56,6 +56,7 @@ struct FpdState
     std::vector<double> h_tmp_fx, h_tmp_fy, h_tmp_fz;
     std::vector<double> h_fft, h_randD, h_randN;
     std::vector<double> h_tri_w;                    // 壁面三对角前推系数（wall_z 时）
+    std::vector<double> h_diag;                     // 长度 1：壁面 (0,0) 列相容性残差 |Σb̂|
 
     // --- 裸指针视图（= vector::data()，kernel 参数用）---
     double *Rx=0,*Ry=0,*Rz=0, *Rux=0,*Ruy=0,*Ruz=0;
@@ -68,6 +69,7 @@ struct FpdState
     double *tmp_fx=0,*tmp_fy=0,*tmp_fz=0;
     double *fft=0,*randD=0,*randN=0;
     double *tri_w=0;                                // 壁面三对角系数（wall_z 时，否则 0）
+    double *diag=0;                                 // 长度 1 的诊断量（见 Poisson.h）
 
     cufftHandle       plan = 0;
     cufftHandle       plan_xy = 0;                  // 壁面 2D 批量 FFT 计划（wall_z 时）

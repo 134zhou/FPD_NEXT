@@ -1,17 +1,21 @@
 #include "./include/Stokes.h"
+#include "./include/Poisson.h"
 
 void step_navier_stokes
 (
     NS_Config cfg,
-    double* vx, double* vy, double* vz,     
-    double* p,                              
-    double* fx, double* fy, double* fz,     
+    double* vx, double* vy, double* vz,
+    double* p,
+    double* fx, double* fy, double* fz,
     double* eta,                            // 正应力位置粘度 (Cell Center)
     double* etaXY, double* etaYZ, double* etaZX, // 切应力位置粘度 (Edges)
-    double* pi_dx, double* pi_dy, double* pi_dz, 
-    double* pi_nx, double* pi_ny, double* pi_nz, 
-    double* fft_data,                       
+    double* pi_dx, double* pi_dy, double* pi_dz,
+    double* pi_nx, double* pi_ny, double* pi_nz,
+    double* fft_data,
     cufftHandle plan,
+    cufftHandle plan_xy,
+    const double* tri_w,
+    double* diag,
     curandGenerator_t gen,
     double* randD, double* randN,
     double* tmp_fx, double* tmp_fy, double* tmp_fz,
@@ -175,60 +179,14 @@ void step_navier_stokes
         }
     }
 
-    // --- 4. FFT 求解泊松方程 (Pressure Solver) ---
-    #pragma acc host_data use_device(fft_data)
-    {
-        CUFFT_CHECK(cufftExecZ2Z(plan, (cufftDoubleComplex*)fft_data,
-                                 (cufftDoubleComplex*)fft_data, CUFFT_FORWARD));
-    }
-
-    // 除以 7 点差分格式的【精确离散】拉普拉斯本征值 2(cos kx + cos ky + cos kz - 3)，
-    // 而非连续谱的 -k²。这样与第 3 步的有限差分离散严格自洽。
-    #pragma acc parallel loop collapse(3) present(fft_data)
-    for (int i = 0; i < Nx; i++)
-    {
-        for (int j = 0; j < Ny; j++)
-        {
-            for (int k = 0; k < Nz; k++)
-            {
-                int ijk = IDX(i, j, k);
-                if (i == 0 && j == 0 && k == 0) { fft_data[ijk*2] = 0; fft_data[ijk*2+1] = 0; continue; }
-                double nrm = 0.5 / (cos(2.*M_PI*i/Nx) + cos(2.*M_PI*j/Ny) + cos(2.*M_PI*k/Nz) - 3.0);
-                fft_data[ijk * 2] *= nrm;
-                fft_data[ijk * 2 + 1] *= nrm;
-            }
-        }
-    }
-
-
-
-    #pragma acc host_data use_device(fft_data)
-    {
-        CUFFT_CHECK(cufftExecZ2Z(plan, (cufftDoubleComplex*)fft_data,
-                                 (cufftDoubleComplex*)fft_data, CUFFT_INVERSE));
-    }
+    // --- 4. 求解压力泊松方程 ---
+    // 按 cfg.wall_z 分派：周期走 3D FFT + 精确离散本征值；壁面走 xy 2D 批量 FFT
+    // + z 向 Thomas。归一化因子（size / Nx·Ny）只在 solve_pressure 内部出现一次。
+    // 数学推导与公式↔代码对照见 doc/PressurePoisson.md。
+    solve_pressure(cfg, fft_data, tri_w, plan, plan_xy, p, diag);
 
     // --- 5. 最终速度更新 (Correction step) ---
-    #pragma acc parallel loop collapse(3) present(vx, vy, vz, p, fft_data, tmp_fx, tmp_fy, tmp_fz, fx, fy, fz)
-    for (int i = 0; i < Nx; i++)
-    {
-        for (int j = 0; j < Ny; j++)
-        {
-            for (int k = 0; k < Nz; k++)
-            {
-                int ijk = IDX(i, j, k);
-
-                // 1. 归一化并存储压力
-                double p_ijk = fft_data[ijk * 2] / (double)size;
-                p[ijk] = p_ijk;
-
-                // 此时必须等待所有 p[ijk] 写入完成，或使用索引访问 fft_data 计算压力梯度
-                // 在 GPU 上，由于 p[ip] 属于相邻线程，需确保同步或直接计算
-            }
-        }
-    }
-
-    // 分离出更新步骤以确保压力场完全算出 (或者使用 fft_data 归一化后的值)
+    // 必须与上面的求解分成两个 kernel：p 的梯度要读相邻线程写的 p。
     #pragma acc parallel loop collapse(3) present(vx, vy, vz, p, tmp_fx, tmp_fy, tmp_fz, fx, fy, fz)
     for (int i = 0; i < Nx; i++)
     {

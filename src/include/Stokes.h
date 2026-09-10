@@ -34,7 +34,10 @@ void step_navier_stokes(
     double* pi_dx, double* pi_dy, double* pi_dz,
     double* pi_nx, double* pi_ny, double* pi_nz,
     double* fft_data,
-    cufftHandle plan,
+    cufftHandle plan,                      // 周期 3D FFT 计划
+    cufftHandle plan_xy,                   // 壁面 xy 批量 2D FFT 计划（wall_z 时用）
+    const double* tri_w,                   // 壁面三对角前推系数（wall_z 时用）
+    double* diag,                          // 壁面 (0,0) 列相容性残差 |Σb̂|（长度 1）
     curandGenerator_t gen,
     double* randD, double* randN,
     double* tmp_fx, double* tmp_fy, double* tmp_fz,
