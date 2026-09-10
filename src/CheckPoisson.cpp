@@ -359,21 +359,24 @@ int run_check_poisson(int Nx, int Ny, int Nz)
     g_fail = 0;
     std::printf("=== 泊松算子往返判据（需 GPU）===\n");
 
+    // ⚠️ 返回值必须累加进 g_fail。曾经这里 6 个调用点全部丢弃返回值，
+    //    于是往返判据 FAIL 时只打印一行 FAIL、退出码仍是 0 —— 所有依赖
+    //    --check-poisson 退出码的回归（含 Phase 7-B 的壁面接线）都会变成假的。
     if (Nx <= 0)
     {
         // 默认电池：偶 Nz、奇 Nz、中等盒子各一（奇偶不对称最容易在奇数 Nz 暴露）
-        roundtrip_grid(8, 4, 6, 0, "P5 周期算子往返（偶 Nz）");
-        roundtrip_grid(8, 4, 6, 1, "P5 壁面算子往返（偶 Nz）");
-        roundtrip_grid(6, 6, 5, 0, "P5 周期算子往返（奇 Nz）");
-        roundtrip_grid(6, 6, 5, 1, "P5 壁面算子往返（奇 Nz）");
-        roundtrip_grid(16, 8, 8, 0, "P6 周期算子往返（中盒子）");
-        roundtrip_grid(16, 8, 8, 1, "P6 壁面算子往返（中盒子）");
+        g_fail += roundtrip_grid(8, 4, 6, 0, "P5 周期算子往返（偶 Nz）");
+        g_fail += roundtrip_grid(8, 4, 6, 1, "P5 壁面算子往返（偶 Nz）");
+        g_fail += roundtrip_grid(6, 6, 5, 0, "P5 周期算子往返（奇 Nz）");
+        g_fail += roundtrip_grid(6, 6, 5, 1, "P5 壁面算子往返（奇 Nz）");
+        g_fail += roundtrip_grid(16, 8, 8, 0, "P6 周期算子往返（中盒子）");
+        g_fail += roundtrip_grid(16, 8, 8, 1, "P6 壁面算子往返（中盒子）");
         check_compat_diag();
     }
     else
     {
-        roundtrip_grid(Nx, Ny, Nz, 0, "周期算子往返");
-        roundtrip_grid(Nx, Ny, Nz, 1, "壁面算子往返");
+        g_fail += roundtrip_grid(Nx, Ny, Nz, 0, "周期算子往返");
+        g_fail += roundtrip_grid(Nx, Ny, Nz, 1, "壁面算子往返");
         check_compat_diag();
     }
 
