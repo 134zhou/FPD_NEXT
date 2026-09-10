@@ -8,6 +8,7 @@
 #include "./include/Stokes.h"
 #include "./include/Viscosity.h"
 #include "./include/Force.h"
+#include "./include/Velocity.h"
 #include "./include/Tests.h"
 
 // ============================================================================
@@ -357,6 +358,110 @@ static void w6_momentum_budget(int Nx, int Ny, int Nz)
 }
 
 // ============================================================================
+// W4：壁面截断下的力守恒 + 均匀流场的粒子速度。
+//
+// 力守恒 Σ_grid f_α == F_α 在截断下【仍然精确成立】，理由是分子（力投影）与分母
+// （sum_phi_α）是同一个 stencil_point<L> 在同一组点上的求和 —— 截断只是让那组点
+// 变少。这正是 CLAUDE.md 第 1 条约束保证的性质。
+//
+// ⚠️ 但这条判据对 stencil_point 的【内部公式错误】仍然是盲的（投影和归一化会一起
+//    错）。所以这里同时跑「均匀流场 v≡1 ⇒ V_i == 1」—— 那条对内部错误不盲。
+// ============================================================================
+static void w4_truncation()
+{
+    const int Nx = 32, Ny = 32, Nz = 32;
+    const int size = Nx * Ny * Nz;
+    const double TOL = 1e-12;
+
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.002, 0.25, true, /*wall_z=*/1);
+    PhiParams pp  = make_phi_params(3.2, 1.0, 50.0);
+
+    // 四种构型：远离壁 / 贴【下】壁 / 贴【上】壁 / N=2 重叠且靠近下壁。
+    // 上壁与下壁走的是【不同】代码路径（下壁棱边是逻辑 k=-1 的额外一层，
+    // 上壁是数组里的 k=Nz-1），所以必须两片都测 —— 只有一侧的判据对
+    // 「上下不对称」是盲的。
+    // ⚠️ 贴上壁那一例的 Rz 必须取【精确离散镜像】Nz-1-Rz：格胞在 z=0..Nz-1、
+    //    棱边在 z=k+1/2，关于 z=(Nz-1)/2 的反射 z -> Nz-1-z 把格胞映到格胞、
+    //    壁面棱边映到壁面棱边。取 Rz=27.0 而不是"看起来对称"的 28.0，
+    //    这样两例的 z/x 必须逐个数字相等，构成真正的上下对称判据。
+    const int    NC[4] = {1, 1, 1, 2};
+    const char*  TG[4] = {"远离壁 Rz=16.5", "贴下壁 Rz=4.0（支撑域被截断）",
+                          "贴上壁 Rz=27.0（= 31-4，下壁的离散镜像）",
+                          "N=2 重叠（间距 6）+ 靠近下壁"};
+    const double RZ[4][2] = {{16.5, 0.0}, {4.0, 0.0}, {27.0, 0.0}, {5.0, 11.0}};
+    double zx_ratio[4] = {0.0, 0.0, 0.0, 0.0};
+
+    for (int c = 0; c < 4; c++)
+    {
+        const int N = NC[c];
+        FpdState st;
+        st.init(cfg, N, ST_KINEMATIC, 0);
+
+        for (int n = 0; n < N; n++)
+        {
+            st.Rx[n] = 16.3; st.Ry[n] = 16.7; st.Rz[n] = RZ[c][n];
+            st.Fx[n] = 1.0;  st.Fy[n] = 2.0;  st.Fz[n] = 3.0;
+        }
+        st.upload(ST_PARTICLE);
+
+        update_viscosity_fields(cfg, pp, N, st.Rx, st.Ry, st.Rz,
+                                st.sum_phix, st.sum_phiy, st.sum_phiz,
+                                st.eta, st.etaXY, st.etaYZ, st.etaZX);
+        update_force_field(cfg, pp, N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz,
+                           st.sum_phix, st.sum_phiy, st.sum_phiz, 0.0, 0.0, 0.0,
+                           st.fx, st.fy, st.fz);
+        st.download(ST_PHI | ST_PARTICLE);
+
+        double sx = 0.0, sy = 0.0, sz = 0.0;
+        for (int t = 0; t < size; t++) { sx += st.fx[t]; sy += st.fy[t]; sz += st.fz[t]; }
+        double FX = 0.0, FY = 0.0, FZ = 0.0;
+        for (int n = 0; n < N; n++) { FX += st.Fx[n]; FY += st.Fy[n]; FZ += st.Fz[n]; }
+
+        const double ex = std::fabs(sx - FX), ey = std::fabs(sy - FY), ez = std::fabs(sz - FZ);
+        const bool ok = (ex < TOL && ey < TOL && ez < TOL);
+        std::printf("      %-34s |err| = %.3e / %.3e / %.3e  %s\n",
+                    TG[c], ex, ey, ez, ok ? "PASS" : "FAIL");
+        if (!ok) { g_fail++; }
+
+        // sum_phiz < sum_phix 证明截断【真的在发生】——否则本判据是空的。
+        // 贴壁那一例的支撑域被下壁切掉一块，z 向归一化必然小于 x 向。
+        zx_ratio[c] = st.sum_phiz[0] / st.sum_phix[0];
+        std::printf("      %-34s sum_phi = %.4f / %.4f / %.4f   z/x = %.6f\n",
+                    "", st.sum_phix[0], st.sum_phiy[0], st.sum_phiz[0], zx_ratio[c]);
+
+        // 均匀流场：vx = vy = 1，vz = 0（壁面法向必须为 0）。
+        // V_i = Σ v w / sum_phi 必须【精确】等于 1（x/y）与 0（z），与截断、与重叠无关。
+        for (int t = 0; t < size; t++) { st.vx[t] = 1.0; st.vy[t] = 1.0; st.vz[t] = 0.0; }
+        st.upload(ST_VELOCITY);
+        update_particle_velocity(cfg, pp, N, st.Rx, st.Ry, st.Rz,
+                                 st.sum_phix, st.sum_phiy, st.sum_phiz,
+                                 st.vx, st.vy, st.vz, st.Vx, st.Vy, st.Vz);
+        st.download(ST_PARTICLE);
+
+        double vmax = 0.0;
+        for (int n = 0; n < N; n++)
+        {
+            vmax = std::max(vmax, std::fabs(st.Vx[n] - 1.0));
+            vmax = std::max(vmax, std::fabs(st.Vy[n] - 1.0));
+            vmax = std::max(vmax, std::fabs(st.Vz[n] - 0.0));
+        }
+        std::printf("      %-34s 均匀流场 max|V_i - 期望| = %.3e  %s\n",
+                    "", vmax, (vmax < TOL) ? "PASS" : "FAIL");
+        if (!(vmax < TOL)) { g_fail++; }
+
+        st.finish();
+    }
+
+    // 上下对称性：离散镜像位置上的 z 向归一化必须【逐个数字】一致。
+    // 这是对「上下必须对称排除」那条要求的判决性检验 —— 只排一侧会让
+    // 力守恒仍然通过（分子分母一起错），但这里会立刻显形。
+    const double asym = std::fabs(zx_ratio[1] - zx_ratio[2]);
+    std::printf("      上下对称：|z/x(下) - z/x(上)| = %.3e   (%.6f vs %.6f)  %s\n",
+                asym, zx_ratio[1], zx_ratio[2], (asym < 1e-12) ? "PASS" : "FAIL");
+    if (!(asym < 1e-12)) { g_fail++; }
+}
+
+// ============================================================================
 // 入口。Nx<=0 时跑内置电池。
 // ============================================================================
 int run_check_wall(int Nx, int Ny, int Nz)
@@ -390,6 +495,9 @@ int run_check_wall(int Nx, int Ny, int Nz)
         std::printf("      （参考）离散闭式与连续抛物线的相对差 = %.3e ≈ 1/(2Nz²) = %.3e\n",
                     dmax / umax, 1.0 / (2.0 * (double)Nz * Nz));
     }
+
+    std::printf("\n[W4] 壁面截断下的力守恒与粒子速度（含贴壁与 N=2 重叠）\n");
+    w4_truncation();
 
     std::printf("\n[W6] z 向动量收支恒等式\n");
     w6_momentum_budget(Nx, Ny, Nz);

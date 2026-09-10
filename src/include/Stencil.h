@@ -94,9 +94,9 @@ inline bool stencil_point(PhiParams pp, NS_Config cfg,
     //    用 (int) 会让整个模板盒偏一格、∫φ 静默变小 —— 而且力守恒判据【抓不到】
     //    （分子分母用同一个错位点集，比值自洽）。周期下 Rnz ≥ 0，两者相同。
     const int in = (int)floor(Rnx), jn = (int)floor(Rny), kn = (int)floor(Rnz);
-    const int ir = li + in - pp.range_m1;
-    const int jr = lj + jn - pp.range_m1;
-    const int kr = lk + kn - pp.range_m1;
+    const int ir = li + in - pp.range;
+    const int jr = lj + jn - pp.range;
+    const int kr = lk + kn - pp.range;
 
     // 到粒子中心的距离，带该 Loc 的半格偏移
     const double dx = ir - Rnx + LocOffset<L>::dx;

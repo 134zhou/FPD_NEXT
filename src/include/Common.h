@@ -23,9 +23,8 @@ struct PhiParams
     double radius;      // 粒子半径 a
     double inv_xi;      // 1/ξ，界面宽度的倒数
     double ratio_eta;   // η_c / η_ℓ
-    int    range;       // 相场作用范围
-    int    range_m1;
-    int    n_range;     // 2*range，局部模板盒的边长
+    int    range;       // 相场作用范围（球形截断半径）
+    int    n_range;     // 2*range + 1，局部模板盒的边长（见下）
     double range2;      // 球形截断判据（比较的是距离平方）
 };
 
@@ -45,8 +44,13 @@ static inline PhiParams make_phi_params(double radius, double xi, double ratio_e
     pp.inv_xi    = 1.0 / xi;
     pp.ratio_eta = ratio_eta;
     pp.range     = (int)(2.*(radius + xi));
-    pp.range_m1  = pp.range - 1;
-    pp.n_range   = 2 * pp.range;
+    // ⚠️ n_range 必须是 2*range + 1，【不能】是 2*range。
+    //    盒取 [kn-range, kn+range]（见 Stencil.h）。半径为 range 的球心落在格胞
+    //    任意位置时，能触及的整数层最多有 2*range+1 个 —— 宽 2*range 的盒会
+    //    在负方向【静默漏掉一层】。漏掉的权重随亚格点位置和 Loc 变化，属于
+    //    C1/C2 那一类「方向相关的伪偏差」，而且力守恒判据抓不到（分子分母
+    //    一起漏，比值自洽）。
+    pp.n_range   = 2 * pp.range + 1;
     pp.range2    = (double)(pp.range * pp.range);
     return pp;
 }
