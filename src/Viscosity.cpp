@@ -14,7 +14,12 @@ void update_viscosity_fields(
     const double d_eta = pp.ratio_eta - 1.0;
 
     // --- 1. 背景粘度 ---
-    #pragma acc parallel loop collapse(3) present(eta, etaXY, etaYZ, etaZX)
+    // 体心与 xy 棱边是 Nz 层；yz/zx 棱边在壁面模式下是 Nz+1 层（含两个壁面棱边）。
+    // ⚠️ 那些层【必须全部初始化】：State 用 api_create（只分配、不初始化），
+    //    漏掉的一层会读到未初始化显存（NaN 或上一次运行的残留），
+    //    然后在一步之内污染全场。周期模式下 enz == Nz，逐位一致。
+    const int enz = wz_edge_nz(cfg);
+    #pragma acc parallel loop collapse(2) present(eta, etaXY, etaYZ, etaZX)
     for (int i = 0; i < Nx; i++)
     {
         for (int j = 0; j < Ny; j++)
@@ -24,8 +29,13 @@ void update_viscosity_fields(
                 int ijk = IDX(i, j, k);
                 eta[ijk]   = 1.0;
                 etaXY[ijk] = 1.0;
-                etaYZ[ijk] = 1.0;
-                etaZX[ijk] = 1.0;
+            }
+            // 棱边按【逻辑 k】遍历：周期 k ∈ [0,Nz)，壁面 k ∈ [-1,Nz-1]
+            for (int kk = 0; kk < enz; kk++)
+            {
+                const int iwk = wz_edge_idx(cfg, i, j, kk - cfg.wall_z);
+                etaYZ[iwk] = 1.0;
+                etaZX[iwk] = 1.0;
             }
         }
     }

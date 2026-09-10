@@ -1,7 +1,9 @@
 #ifndef STENCIL_H
 #define STENCIL_H
 
+#include <cmath>
 #include "Common.h"
+#include "Wall.h"
 
 // ============================================================================
 // 交错网格模板盒遍历的【唯一真值源】
@@ -42,6 +44,30 @@ static inline int stencil_size(PhiParams pp)
     return pp.n_range * pp.n_range * pp.n_range;
 }
 
+// ---------------------------------------------------------------------------
+// 每个 Loc 在 z 方向的「层类型」，决定壁面模式下的有效性判据与存储映射。
+//
+//   ZCELL  体心层      z = k          有效 k ∈ [0, Nz-1]      存 IDX
+//   ZFACE  z 面（速度） z = k+1/2      有效 k ∈ [0, Nz-2]      存 IDX
+//          上壁那个面（k=Nz-1）是钉死的壁面，没有自由度；下壁（k=-1）不在数组里。
+//          **上下必须对称排除** —— 只排一侧会让力守恒静默破坏。
+//   ZEDGE  棱边层      z = k+1/2      有效 k ∈ [-1, Nz-1]     存 edge_idx（Nz+1 层）
+//          两个壁面棱边【都要】保留：Π_yz/Π_zx 在壁面上就是壁面剪切应力，
+//          且贴壁粒子的界面粘度不能被截掉一半。
+//
+// 周期模式下三者的判据全部退化（`(k+Nz)%Nz` 自动成立），语义与 Phase 1 逐位一致。
+// ---------------------------------------------------------------------------
+enum ZKind { ZCELL, ZFACE, ZEDGE };
+
+template<Loc L> struct LocZKind;
+template<> struct LocZKind<CELL>    { static constexpr ZKind k = ZCELL; };
+template<> struct LocZKind<FACE_X>  { static constexpr ZKind k = ZCELL; };
+template<> struct LocZKind<FACE_Y>  { static constexpr ZKind k = ZCELL; };
+template<> struct LocZKind<EDGE_XY> { static constexpr ZKind k = ZCELL; };
+template<> struct LocZKind<FACE_Z>  { static constexpr ZKind k = ZFACE; };
+template<> struct LocZKind<EDGE_YZ> { static constexpr ZKind k = ZEDGE; };
+template<> struct LocZKind<EDGE_ZX> { static constexpr ZKind k = ZEDGE; };
+
 // 把局部平铺索引 l ∈ [0, n_range³) 映射到全局周期索引 ijk 和相场权重 w。
 //
 // 返回 false 表示该点在球形截断之外，调用方应跳过。
@@ -62,8 +88,12 @@ inline bool stencil_point(PhiParams pp, NS_Config cfg,
     const int lj = (l / nr) % nr;
     const int lk = l % nr;
 
-    // 模板盒以粒子所在格胞为中心
-    const int in = (int)Rnx, jn = (int)Rny, kn = (int)Rnz;
+    // 模板盒以粒子所在格胞为中心。
+    // ⚠️ 必须用 floor 而不是 (int)：壁面模式下粒子中心的合法范围是
+    //    z ∈ (-1/2, Nz-1/2)，【可以为负】。(int)(-0.3) = 0 而 floor(-0.3) = -1，
+    //    用 (int) 会让整个模板盒偏一格、∫φ 静默变小 —— 而且力守恒判据【抓不到】
+    //    （分子分母用同一个错位点集，比值自洽）。周期下 Rnz ≥ 0，两者相同。
+    const int in = (int)floor(Rnx), jn = (int)floor(Rny), kn = (int)floor(Rnz);
     const int ir = li + in - pp.range_m1;
     const int jr = lj + jn - pp.range_m1;
     const int kr = lk + kn - pp.range_m1;
@@ -75,8 +105,22 @@ inline bool stencil_point(PhiParams pp, NS_Config cfg,
 
     if (dx*dx + dy*dy + dz*dz > pp.range2) { return false; }   // 唯一的截断判据
 
-    // 唯一的周期回绕
-    ijk = IDX((ir + Nx) % Nx, (jr + Ny) % Ny, (kr + Nz) % Nz);
+    // --- x/y 周期回绕（两种模式都一样）---
+    const int iw = (ir + Nx) % Nx;
+    const int jw = (jr + Ny) % Ny;
+
+    // --- z：壁面模式下的截断（上下对称）---
+    constexpr ZKind zk = LocZKind<L>::k;
+    if (cfg.wall_z)
+    {
+        if (zk == ZFACE)      { if (kr < 0 || kr > Nz - 2) { return false; } }
+        else if (zk == ZCELL) { if (kr < 0 || kr > Nz - 1) { return false; } }
+        else                  { if (kr < -1 || kr > Nz - 1) { return false; } }
+    }
+
+    // 唯一的存储映射：棱边层可能要 Nz+1 层（壁面模式），其余走 IDX。
+    // 周期模式下 wz_edge_idx 就是 IDX(...,(kr+Nz)%Nz)，逐位一致。
+    ijk = (zk == ZEDGE) ? wz_edge_idx(cfg, iw, jw, kr) : IDX(iw, jw, (kr + Nz) % Nz);
     w   = order(dx, dy, dz, pp.radius, pp.inv_xi);
     return true;
 }

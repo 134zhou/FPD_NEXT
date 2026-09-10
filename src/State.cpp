@@ -26,6 +26,13 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
     const size_t nbN    = (size_t)nalloc * sizeof(double);
     const size_t nbSize = size * sizeof(double);
 
+    // 棱边数组（etaYZ/etaZX/pi_nx/pi_ny/randN 的两个分量）在壁面模式下多一层：
+    // 逻辑 k ∈ [-1, Nz-1] 共 Nz+1 层（含 z=∓1/2 两片壁面棱边）。周期下 == size。
+    esize = (size_t)wz_edge_size(cfg);
+    nbEdge = esize * sizeof(double);
+    slotD  = (size_t)wz_rand_slot_d(cfg);   // randD 长度（偶数）
+    slotN  = (size_t)wz_rand_slot_n(cfg);   // randN 长度（偶数）
+
     // 依赖关系：SOLVER 需要 VELOCITY 与 PHI 的场（step_navier_stokes 的参数）
     if (want & ST_SOLVER)
     {
@@ -53,7 +60,8 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
     if (want & ST_PHI)
     {
         h_fx.assign(size, 0); h_fy.assign(size, 0); h_fz.assign(size, 0);
-        h_eta.assign(size, 0); h_etaXY.assign(size, 0); h_etaYZ.assign(size, 0); h_etaZX.assign(size, 0);
+        h_eta.assign(size, 0); h_etaXY.assign(size, 0);
+        h_etaYZ.assign(esize, 0); h_etaZX.assign(esize, 0);   // 棱边：Nz+1 层（壁面模式）
         fx = h_fx.data(); fy = h_fy.data(); fz = h_fz.data();
         eta = h_eta.data(); etaXY = h_etaXY.data(); etaYZ = h_etaYZ.data(); etaZX = h_etaZX.data();
     }
@@ -65,10 +73,10 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
     if (want & ST_SOLVER)
     {
         h_pi_dx.assign(size, 0); h_pi_dy.assign(size, 0); h_pi_dz.assign(size, 0);
-        h_pi_nx.assign(size, 0); h_pi_ny.assign(size, 0); h_pi_nz.assign(size, 0);
+        h_pi_nx.assign(esize, 0); h_pi_ny.assign(esize, 0); h_pi_nz.assign(size, 0);
         h_tmp_fx.assign(size, 0); h_tmp_fy.assign(size, 0); h_tmp_fz.assign(size, 0);
         h_fft.assign(size * 2, 0);
-        h_randD.assign(size * 3, 0); h_randN.assign(size * 3, 0);
+        h_randD.assign(slotD, 0); h_randN.assign(slotN, 0);
         h_diag.assign(1, 0);
         pi_dx = h_pi_dx.data(); pi_dy = h_pi_dy.data(); pi_dz = h_pi_dz.data();
         pi_nx = h_pi_nx.data(); pi_ny = h_pi_ny.data(); pi_nz = h_pi_nz.data();
@@ -97,7 +105,8 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
     if (want & ST_PHI)
     {
         api_copyin(fx, nbSize); api_copyin(fy, nbSize); api_copyin(fz, nbSize);
-        api_create(eta, nbSize); api_create(etaXY, nbSize); api_create(etaYZ, nbSize); api_create(etaZX, nbSize);
+        api_create(eta, nbSize); api_create(etaXY, nbSize);
+        api_create(etaYZ, nbEdge); api_create(etaZX, nbEdge);
     }
     if (want & ST_VELOCITY)
     {
@@ -106,11 +115,11 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
     if (want & ST_SOLVER)
     {
         api_create(pi_dx, nbSize); api_create(pi_dy, nbSize); api_create(pi_dz, nbSize);
-        api_create(pi_nx, nbSize); api_create(pi_ny, nbSize); api_create(pi_nz, nbSize);
+        api_create(pi_nx, nbEdge); api_create(pi_ny, nbEdge); api_create(pi_nz, nbSize);
         api_create(tmp_fx, nbSize); api_create(tmp_fy, nbSize); api_create(tmp_fz, nbSize);
         api_create(fft, size * 2 * sizeof(double));
-        api_create(randD, size * 3 * sizeof(double));
-        api_create(randN, size * 3 * sizeof(double));
+        api_create(randD, slotD * sizeof(double));
+        api_create(randN, slotN * sizeof(double));
         api_create(diag, sizeof(double));       // 单元素诊断量，create 即可（求解器整体覆写）
         if (cfg.wall_z) { api_copyin(tri_w, nbSize); }
     }
@@ -144,12 +153,12 @@ void FpdState::finish()
     if (parts & ST_SOLVER)
     {
         api_delete(diag, sizeof(double));
-        api_delete(randN, size * 3 * sizeof(double));
-        api_delete(randD, size * 3 * sizeof(double));
+        api_delete(randN, slotN * sizeof(double));
+        api_delete(randD, slotD * sizeof(double));
         api_delete(fft, size * 2 * sizeof(double));
         if (tri_w) { api_delete(tri_w, nbSize); tri_w = 0; }
         api_delete(tmp_fz, nbSize); api_delete(tmp_fy, nbSize); api_delete(tmp_fx, nbSize);
-        api_delete(pi_nz, nbSize); api_delete(pi_ny, nbSize); api_delete(pi_nx, nbSize);
+        api_delete(pi_nz, nbSize); api_delete(pi_ny, nbEdge); api_delete(pi_nx, nbEdge);
         api_delete(pi_dz, nbSize); api_delete(pi_dy, nbSize); api_delete(pi_dx, nbSize);
     }
     if (parts & ST_VELOCITY)
@@ -158,7 +167,7 @@ void FpdState::finish()
     }
     if (parts & ST_PHI)
     {
-        api_delete(etaZX, nbSize); api_delete(etaYZ, nbSize); api_delete(etaXY, nbSize); api_delete(eta, nbSize);
+        api_delete(etaZX, nbEdge); api_delete(etaYZ, nbEdge); api_delete(etaXY, nbSize); api_delete(eta, nbSize);
         api_delete(fz, nbSize); api_delete(fy, nbSize); api_delete(fx, nbSize);
     }
     if (parts & ST_PARTICLE)
@@ -212,7 +221,8 @@ void FpdState::download(unsigned bits)
     if (bits & ST_PHI)
     {
         api_down(fx, nbSize); api_down(fy, nbSize); api_down(fz, nbSize);
-        api_down(eta, nbSize); api_down(etaXY, nbSize); api_down(etaYZ, nbSize); api_down(etaZX, nbSize);
+        api_down(eta, nbSize); api_down(etaXY, nbSize);
+        api_down(etaYZ, nbEdge); api_down(etaZX, nbEdge);
     }
     if (bits & ST_VELOCITY)
     {
@@ -239,7 +249,8 @@ void FpdState::upload(unsigned bits)
     if (bits & ST_PHI)
     {
         api_up(fx, nbSize); api_up(fy, nbSize); api_up(fz, nbSize);
-        api_up(eta, nbSize); api_up(etaXY, nbSize); api_up(etaYZ, nbSize); api_up(etaZX, nbSize);
+        api_up(eta, nbSize); api_up(etaXY, nbSize);
+        api_up(etaYZ, nbEdge); api_up(etaZX, nbEdge);
     }
     if (bits & ST_VELOCITY)
     {

@@ -60,6 +60,15 @@ int main(int argc, char** argv)
         return run_check_poisson(Px, Py, Pz);
     }
 
+    // Phase 7-B 壁面判据：需 GPU（走 cuFFT），但不开噪声
+    if (argc > 1 && std::strcmp(argv[1], "--check-wall") == 0)
+    {
+        const int Px = (argc > 2) ? std::atoi(argv[2]) : 0;
+        const int Py = (argc > 3) ? std::atoi(argv[3]) : 0;
+        const int Pz = (argc > 4) ? std::atoi(argv[4]) : 0;
+        return run_check_wall(Px, Py, Pz);
+    }
+
     // 常量表：--lambda [L]   （纯 CPU，秒级）
     if (argc > 1 && std::strcmp(argv[1], "--lambda") == 0)
     {
@@ -110,6 +119,7 @@ int main(int argc, char** argv)
               << "      fpd_check --check-potential\n"
               << "      fpd_check --check-tridiag\n"
               << "      fpd_check --check-poisson [Nx Ny Nz]\n"
+              << "      fpd_check --check-wall [Nx Ny Nz]\n"
               << "      fpd_check --lambda [L]\n"
               << "      fpd_check --noise [L] [dt] [kT] [steps]\n"
               << "      fpd_check --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]\n";

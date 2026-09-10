@@ -41,6 +41,7 @@
 #define FPD_VERSION     1u
 #define FPD_ENDIAN_TAG  0x01020304u
 #define FPD_FLAG_PRESSURE 0x1u
+#define FPD_FLAG_WALL_Z   0x2u   // 该存档是 z 向无滑移壁面构型（vz[...,Nz-1] 必须为 0）
 
 struct CkptHeader
 {
@@ -54,6 +55,7 @@ struct CkptHeader
     uint64_t rng_draws = 0;
 
     bool   has_pressure() const { return (flags & FPD_FLAG_PRESSURE) != 0; }
+    bool   has_wall_z()   const { return (flags & FPD_FLAG_WALL_Z)   != 0; }
     size_t size() const { return (size_t)Nx * (size_t)Ny * (size_t)Nz; }
 };
 

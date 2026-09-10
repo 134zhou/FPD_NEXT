@@ -19,6 +19,7 @@ MAGIC       = b"FPDCKPT\0"
 VERSION     = 1
 ENDIAN_TAG  = 0x01020304
 FLAG_PRESSURE = 0x1
+FLAG_WALL_Z   = 0x2   # z 向无滑移壁面构型（与 IOBin.h 的 FPD_FLAG_WALL_Z 对应）
 
 FNV_OFFSET = 14695981039346656037
 FNV_PRIME  = 1099511628211
@@ -70,10 +71,13 @@ def _fnv_bytes(h, buf):
 
 def default_header(Nx, Ny, Nz, N, dt=0.002, kT=0.25, radius=3.2, xi=1.0,
                    ratio_eta=50.0, noise_on=1, seed=1234, step=0,
-                   rng_draws=0, has_pressure=False):
+                   rng_draws=0, has_pressure=False, wall_z=False):
+    flags = FLAG_PRESSURE if has_pressure else 0
+    if wall_z:
+        flags |= FLAG_WALL_Z
     return {
         "version": VERSION,
-        "flags": FLAG_PRESSURE if has_pressure else 0,
+        "flags": flags,
         "Nx": Nx, "Ny": Ny, "Nz": Nz, "N": N,
         "step": step,
         "dt": dt, "kT": kT, "radius": radius, "xi": xi, "ratio_eta": ratio_eta,

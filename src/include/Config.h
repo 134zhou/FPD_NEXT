@@ -33,8 +33,13 @@ struct FpdConfig
     double gravity_x = 0.0;
     double gravity_y = 0.0;
     double gravity_z = 0.0;
-    int    gravity_compensate = 1;   // 外场叠加背景力密度，抵消 k=0 漂移（过渡；壁面 Phase 后转 0）
+    // -1 = auto：由 boundary_z 决定（periodic → 1，noslip → 0，壁面提供真实动量汇）。
+    // 显式写 1 又同时开壁面 = 双重扣除，validate_config 会硬性拒绝（不静默改）。
+    int    gravity_compensate = -1;
     int    noise_on = 1;
+
+    // z 向边界：periodic（默认，全周期）| noslip（z 上下无滑移硬壁，x/y 仍周期）
+    std::string boundary_z = "periodic";
 
     // --- 粒子间势（可选；potential=none 时以下全部不用）---
     std::string potential = "none";   // none | wca | morse | lj126
@@ -85,6 +90,13 @@ bool validate_config(const FpdConfig& c, std::string& err);
 // 归档最终配置。附带打印派生量（标注为 derived，不可作为输入）。
 bool dump_config(const FpdConfig& c, const char* path, std::string& err);
 void print_config_help();
+
+// boundary_z 字符串 -> wall_z（0/1）。唯一转换点。
+int wall_z_of(const FpdConfig& c);
+
+// gravity_compensate 的 auto 解析（-1 = 由 boundary_z 决定）。
+// ⚠️ 结果必须被打印，不能静默。
+int gravity_compensate_of(const FpdConfig& c);
 
 NS_Config make_ns_config(const FpdConfig& c);
 PhiParams make_phi_params(const FpdConfig& c);

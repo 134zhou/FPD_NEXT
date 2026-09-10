@@ -54,27 +54,39 @@ def place_lattice(Nx, Ny, Nz, n, min_sep):
     return pts
 
 
-def place_random(Nx, Ny, Nz, n, min_sep, seed, max_try=200000):
-    """拒绝采样，保证周期最小镜像下的间距 >= min_sep。"""
+def minsq_with(p, q, Nx, Ny, Nz, wall):
+    """p 与 q 的距离平方，带最小镜像。wall=True 时 z 向【不】折叠。"""
+    dx = p[0] - q[0]; dy = p[1] - q[1]; dz = p[2] - q[2]
+    dx -= Nx * round(dx / Nx)
+    dy -= Ny * round(dy / Ny)
+    if not wall:
+        dz -= Nz * round(dz / Nz)
+    return dx * dx + dy * dy + dz * dz, dz
+
+
+def place_random(Nx, Ny, Nz, n, min_sep, seed, wall=False, z_margin=0.0,
+                 max_try=200000):
+    """拒绝采样，保证最小镜像下的间距 >= min_sep。壁面模式下 z 向不折叠。"""
     rng = random.Random(seed)
     pts = []
     tries = 0
     s2 = min_sep * min_sep
+    zlo, zhi = -0.5 + z_margin, Nz - 0.5 - z_margin
+    if wall and zlo >= zhi:
+        raise SystemExit(
+            "壁面模式下盒子太薄：Nz=%d 放不下离两壁各 %g 的粒子" % (Nz, z_margin))
     while len(pts) < n:
         tries += 1
         if tries > max_try:
             raise SystemExit(
                 "放了 %d/%d 个粒子后 %d 次尝试仍失败：盒子太小或 min_sep 太大"
                 % (len(pts), n, max_try))
-        p = (rng.uniform(0, Nx), rng.uniform(0, Ny), rng.uniform(0, Nz))
+        p = (rng.uniform(0, Nx), rng.uniform(0, Ny),
+             rng.uniform(zlo, zhi) if wall else rng.uniform(0, Nz))
         ok = True
         for q in pts:
-            dx = p[0] - q[0]; dy = p[1] - q[1]; dz = p[2] - q[2]
-            # 最小镜像
-            dx -= Nx * round(dx / Nx)
-            dy -= Ny * round(dy / Ny)
-            dz -= Nz * round(dz / Nz)
-            if dx * dx + dy * dy + dz * dz < s2:
+            dsq, _ = minsq_with(p, q, Nx, Ny, Nz, wall)
+            if dsq < s2:
                 ok = False
                 break
         if ok:
@@ -102,20 +114,41 @@ def main():
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--pattern", choices=["zero", "index"], default="zero",
                     help="速度场填法；index 用于轴序互操作判据")
+    ap.add_argument("--wall-z", action="store_true",
+                    help="z 向无滑移壁面构型（置 FPD_FLAG_WALL_Z，z 向不折叠）")
+    ap.add_argument("--wall-margin", type=float, default=None,
+                    help="粒子中心离两壁的最小距离，默认 = 相场截断半径 range")
     ap.add_argument("-o", "--out", required=True)
     a = ap.parse_args()
 
     Nx, Ny, Nz = a.grid
     min_sep = a.min_sep if a.min_sep is not None else (2.0 * a.radius + a.xi)
 
+    # 壁面下粒子必须离两壁 >= range，否则相场支撑域被截断、初始构型就已在物理上无效。
+    # 默认 range 与 C++ 侧 make_phi_params 一致：ceil(radius + 3*xi) + 1。
+    z_margin = 0.0
+    if a.wall_z:
+        if a.wall_margin is not None:
+            z_margin = a.wall_margin
+        else:
+            z_margin = float(math.ceil(a.radius + 3.0 * a.xi) + 1)
+
     if a.single:
         pts = place_single(Nx, Ny, Nz)
+        if a.wall_z and not (-0.5 + z_margin <= pts[0][2] <= Nz - 0.5 - z_margin):
+            raise SystemExit("盒心放不下离两壁各 %g 的粒子（Nz=%d）" % (z_margin, Nz))
     elif a.empty:
         pts = []
     elif a.lattice:
         pts = place_lattice(Nx, Ny, Nz, a.lattice, min_sep)
+        if a.wall_z:
+            bad = [p for p in pts if not (-0.5 + z_margin <= p[2] <= Nz - 0.5 - z_margin)]
+            if bad:
+                raise SystemExit("规则堆积有 %d 个粒子离壁 < %g，请改用 --random"
+                                 % (len(bad), z_margin))
     else:
-        pts = place_random(Nx, Ny, Nz, a.random, min_sep, a.seed)
+        pts = place_random(Nx, Ny, Nz, a.random, min_sep, a.seed,
+                           wall=a.wall_z, z_margin=z_margin)
 
     N = len(pts)
     size = Nx * Ny * Nz
@@ -124,7 +157,7 @@ def main():
                               dt=a.dt, kT=a.kT, radius=a.radius, xi=a.xi,
                               ratio_eta=a.ratio_eta, noise_on=a.noise_on,
                               seed=a.seed, step=0, rng_draws=0,
-                              has_pressure=False)
+                              has_pressure=False, wall_z=a.wall_z)
 
     if a.pattern == "index":
         # v[IDX(i,j,k)] = i*1e6 + j*1e3 + k，IDX = i + j*Nx + k*Nx*Ny
@@ -157,19 +190,16 @@ def main():
     print("  网格 %dx%dx%d   粒子 %d   校验和 0x%016x" % (Nx, Ny, Nz, N, h))
     print("  体积 %.2f MB" % (os.path.getsize(a.out) / 1024.0 / 1024.0))
     if N > 1:
-        dmin = min(_pbc_dist(pts[i], pts[j], Nx, Ny, Nz)
+        dmin = min(minsq_with(pts[i], pts[j], Nx, Ny, Nz, a.wall_z)[0] ** 0.5
                    for i in range(N) for j in range(i + 1, N))
         print("  最小粒子间距 %.3f  (2a+xi = %.3f)" % (dmin, 2 * a.radius + a.xi))
         if dmin < 2 * a.radius:
             print("  [警告] 有粒子重叠，重叠区 eta 会叠加超过 eta_c")
-
-
-def _pbc_dist(p, q, Nx, Ny, Nz):
-    dx = p[0] - q[0]; dy = p[1] - q[1]; dz = p[2] - q[2]
-    dx -= Nx * round(dx / Nx)
-    dy -= Ny * round(dy / Ny)
-    dz -= Nz * round(dz / Nz)
-    return math.sqrt(dx * dx + dy * dy + dz * dz)
+    if a.wall_z:
+        print("  z 向无滑移壁面；粒子离壁 >= %.2f（壁面在 z = -0.5 与 %g）"
+              % (z_margin, Nz - 0.5))
+        if any(p[2] < 0.5 or p[2] > Nz - 1.5 for p in pts):
+            print("  [注意] 有粒子的中心落在最外两个格胞内（0.5 或 Nz-1.5 以内）")
 
 
 if __name__ == "__main__":

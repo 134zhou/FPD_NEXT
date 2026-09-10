@@ -49,6 +49,7 @@ add_executable(fpd_check
     src/CheckNoise.cpp
     src/CheckPotential.cpp
     src/CheckPoisson.cpp
+    src/CheckWall.cpp
 )
 target_link_libraries(fpd_check PRIVATE fpd_core)
 

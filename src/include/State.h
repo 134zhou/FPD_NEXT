@@ -6,6 +6,7 @@
 #include <curand.h>
 #include "Common.h"
 #include "IOBin.h"
+#include "Wall.h"
 
 // ============================================================================
 // FpdState —— 主机侧存储 + 设备映射 + FFT/RNG 句柄的唯一持有者
@@ -43,6 +44,10 @@ struct FpdState
     int    N       = 0;      // 粒子数（可为 0，见 init）
     int    nalloc  = 1;      // = max(N,1)；acc_* 对 0 字节危险，clamp 到 1
     size_t size    = 0;      // Nx*Ny*Nz
+    size_t esize   = 0;      // 棱边数组元素数：size，或壁面模式下的 Nx*Ny*(Nz+1)
+    size_t nbEdge  = 0;      // = esize * sizeof(double)
+    size_t slotD   = 0;      // randD 元素数（向上取偶，见 Wall.h）
+    size_t slotN   = 0;      // randN 元素数（向上取偶）
     unsigned parts = 0;      // 已映射的位集
 
     // --- 主机侧存储（RAII）---

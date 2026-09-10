@@ -58,6 +58,16 @@ static int run_production(const FpdConfig& c)
                       << "，配置文件要求 " << cfg.Nx << "x" << cfg.Ny << "x" << cfg.Nz << "\n";
             return 2;
         }
+        // z 向边界也必须一致：拿周期存档去跑壁面（或反之）会得到一个物理上错误的
+        // 初态（典型是 vz[...,Nz-1] != 0，直接破坏泊松的相容性条件 Σ_k b̂_k = 0，
+        // 表现为压力的线性漂移）。不静默采信任何一方。
+        if (fh.has_wall_z() != (cfg.wall_z != 0))
+        {
+            std::cerr << "错误: " << c.init_file << " 是 "
+                      << (fh.has_wall_z() ? "z 向无滑移壁面" : "z 向周期")
+                      << " 构型，而配置 boundary_z=" << c.boundary_z << "。两者必须一致\n";
+            return 2;
+        }
         h = fh;
 
         // 配置里的 seed 优先 —— 否则 --set seed=... 会被 init 文件里的值静默吞掉。
@@ -111,10 +121,18 @@ static int run_production(const FpdConfig& c)
     const ExternalField  ext = make_external_field(c);
 
     // 背景力密度补偿：外场均匀时 Σ_n F = N·g ≠ 0，流体 k=0 被线性加速、整盒漂移。
-    // bg = −ΣF/size 抵消它。壁面 Phase 上线后（有真实动量汇）此开关默认转 0。
-    const double bgx = c.gravity_compensate ? -(ext.gx * (double)N) / (double)size : 0.0;
-    const double bgy = c.gravity_compensate ? -(ext.gy * (double)N) / (double)size : 0.0;
-    const double bgz = c.gravity_compensate ? -(ext.gz * (double)N) / (double)size : 0.0;
+    // bg = −ΣF/size 抵消它。z 向壁面上线后（有真实动量汇）auto 解析为 0。
+    // ⚠️ auto 的结果【显式打印】—— 配置值随另一个配置项变化是新引入的语义，
+    //    静默是本项目反复点名的事故类别。
+    const int comp = gravity_compensate_of(c);
+    if (c.gravity_compensate < 0)
+    {
+        std::cout << "gravity_compensate = auto -> " << comp
+                  << "   (boundary_z=" << c.boundary_z << ")" << std::endl;
+    }
+    const double bgx = comp ? -(ext.gx * (double)N) / (double)size : 0.0;
+    const double bgy = comp ? -(ext.gy * (double)N) / (double)size : 0.0;
+    const double bgz = comp ? -(ext.gz * (double)N) / (double)size : 0.0;
 
     if (c.potential != "none")
     {
@@ -150,7 +168,9 @@ static int run_production(const FpdConfig& c)
             // 仅供人读：实际使用的 offset 由 step 直接算出，读回时不采信此值
             oh.rng_draws = 2ULL * (unsigned long long)step
                          * 3ULL * (unsigned long long)h.size();
-            oh.flags = c.save_pressure ? FPD_FLAG_PRESSURE : 0u;
+            // 局部 struct 不能引用外层函数的局部变量，所以墙标志从 st.cfg 取
+            oh.flags = (c.save_pressure ? FPD_FLAG_PRESSURE : 0u)
+                     | (st.cfg.wall_z ? FPD_FLAG_WALL_Z : 0u);
 
             CkptArrays oa = st.ckpt_arrays();
             if (!c.save_pressure) { oa.p = 0; }
