@@ -64,7 +64,10 @@ add_executable(fpd_check
 target_link_libraries(fpd_check PRIVATE fpd_core)
 
 # 7. 纯 CPU 的检查工具 fpd_tool（不需要 GPU，可在无卡机器上跑）
-add_executable(fpd_tool tests/tool_main.cpp)
+#    Analysis.cpp 也在这里：--sed-stats 要复用它的事务分块平均与平台判据。
+#    ⚠️ 沉降统计【只此一份实现】。绝不在 Python 侧另写一份分块平均 ——
+#       那会造出「两处独立定义同一个统计量」的漂移点，而没有任何判据能发现漂移。
+add_executable(fpd_tool tests/tool_main.cpp tests/Analysis.cpp)
 target_link_libraries(fpd_tool PRIVATE fpd_core)
 
 # tests/spike/ 不参与构建：一次性的前置风险验证程序，各自用 nvc++/g++ 单独编译，

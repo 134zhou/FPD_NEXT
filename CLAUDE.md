@@ -176,6 +176,29 @@ vector-reduction-over-j，零 atomic），求和顺序在固定 N 与固定 gang
 `./build/fpd_check --check-wall`（含 W1/W2/W3/W4/W4s/W6/W5'a/W5b/W7），并同步
 `doc/PressurePoisson.md` §14（公式 ↔ 代码对照表在那里）。
 
+### 9. 壁面的「速度边界」与「粒子力」是两个真值源，别混
+
+壁面有两件事，各自有唯一真值源，**不要在一个里加另一个的代码**：
+
+| 管什么 | 真值源 | 配套文档 | 配套判据 |
+|---|---|---|---|
+| 流场的速度/噪声 BC（ghost、棱边、γ=√2） | `src/include/Wall.h` | `doc/PressurePoisson.md` §14 | `--check-wall` W1–W7 |
+| **粒子**受的壁面排斥力 | `src/include/Potential.h` 的 `wall_gap_*` / `wall_force_z` | `doc/PressurePoisson.md` §15 | `--check-wall` W8 |
+
+`wall_force_z` 的自变量是**表面间隙** `h = (z ± 1/2) - a`，不是中心距 ——
+改 `radius` 时平衡间隙必须不变。势函数族逐字复用 `pair_force_over_r`，
+所以 J1 的四阶微分判据自动覆盖它；新增的只有几何装配。
+
+⚠️ **前置条件 `h > 0` 是调用方的责任**：`h < 0` 时 `h²` 仍为正，
+`pair_force_over_r(h²)·h` 会给出**符号反向**的力（把粒子往壁里推）——
+一条无诊断的错物理路径。所以函数**不兜底、不 clamp**，
+`main.cpp` 的 `check_wall_bounds` 在 `wall_pot != none` 时把合法区间收紧到
+`z ∈ [-1/2+a, Nz-1/2-a]` 并中止。
+
+改完 `Potential.h` / `Potential.cpp` / `Wall.h` / `main.cpp` 的越界判据之后**必须**跑
+`./build/fpd_check --check-wall`，其中 **W8e 是回归锚**：`wall_pot = none` 时
+W1–W7 的全部数字必须逐字节不变。
+
 几个不能忘的数：
 - 壁面剪切噪声因子 **γ=2（幅度 ×√2）**，只有 `EDGE_YZ`/`EDGE_ZX` 的两片壁面棱边需要。
   `Π_zz` 与 `Π_xy` **不需要**。推导见 §14.3，判据 W5b 用 γ≡1 对照证明它被数据选中
@@ -275,8 +298,16 @@ Phase 0/1/2/3/5/7 完成，**Phase 8-A 完成**。流体求解器、交错网格
 两个周期专属判据被删，**逐条记录在 `PROGRESS.md` 的「Phase 8-A」一节与已知隐患 11；
 `--equipart` 留下的粒子侧 FDT 空洞需要新推导（列为 Phase 6 首项 W7）**。
 
-**下一步是 Phase 6（生产算例 + 旧代码对照，建议先做 W7）或 Phase 4（L 外推）**，无阻塞项。
-明确**未做**粒子-壁面排斥势（粒子靠初始构型远离壁面，越界报错中止）。
+Phase 6 进行中：**粒子-壁面排斥势已完成**（W8a–W8e 全绿 + 回归锚逐字节通过），
+多粒子集体沉降算例已能跑通（`config/sed.cfg`）。
+
+**下一步**：Phase 6 余项（旧代码对照）或 Phase 4（L 外推）。
+
+**明确未做**（各自有记录，别以为受判据保护）：
+- 粒子-壁面排斥势是**模型**不是推导（§15.3）；`h > 0` 由 `check_wall_bounds` 兜底
+- Phase 4 的 L 外推 —— 单盒子测到的沉降速度含壁面受限 + 周期镜像污染，
+  **只能做同盒子内的相对比较**，不能说复现了绝对 Stokes 阻力
+- W7（冻结粒子在壁面盒中的能量均分）—— 粒子侧 FDT 仍是空洞（已知隐患 11）
 
 ## 工作方式
 

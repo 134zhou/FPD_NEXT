@@ -3,6 +3,7 @@
 //   fpd_tool --dump-ckpt <file> [--at i j k]
 //   fpd_tool --diff-ckpt <a> <b>
 //   fpd_tool --verify-forces <ckpt> <config.used>
+//   fpd_tool --sed-stats <f1> <f2> ... [--window A B] [--bins K]
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -13,6 +14,7 @@
 #include "IOBin.h"
 #include "Config.h"
 #include "Potential.h"
+#include "Analysis.h"     // 分块平均与平台判据：沉降统计与 fpd_check 【共用同一份】
 
 static void usage()
 {
@@ -20,6 +22,9 @@ static void usage()
     printf("  fpd_tool --dump-ckpt <file> [--at i j k]   打印头部；--at 打印指定格点的 v\n");
     printf("  fpd_tool --diff-ckpt <a> <b>              逐位比较两个检查点\n");
     printf("  fpd_tool --verify-forces <ckpt> <config>  用配置重算粒子力，与文件里的 F 对照\n");
+    printf("  fpd_tool --sed-stats <f1> <f2> ...        沉降统计：<Vz>(t)、质心、最小壁面间隙、φ(z)\n");
+    printf("      [--window A B]  只统计 step ∈ [A,B] 的检查点（缺省用后一半）\n");
+    printf("      [--bins K]      φ(z) 的分箱数（缺省 16）\n");
 }
 
 // 按 header 分配好数组的持有者
@@ -240,6 +245,244 @@ static int cmd_verify_forces(const char* ckpt_path, const char* cfg_path)
     return ok ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// --sed-stats：从一串 .fpd 检查点重建沉降统计（纯 CPU，不碰 GPU）
+//
+// 只用 .fpd 里的【粒子块】（R/Ru/V），流体场一个字节都不看 —— 沉降的平均速度、
+// 质心高度、壁面间隙、浓度剖面全都只需要粒子坐标。
+//
+// ⚠️ 分块平均【复用 tests/Analysis.cpp】。本工具不另写一份 —— 把相关样本当独立
+//    样本会让误差棒低估约 7.5 倍，而「两处独立定义同一个统计量」是个没有判据能
+//    发现的漂移点。找不到平台时按设计拒绝背书（pick_plateau 返回 -1）。
+//
+// ⚠️ φ(z) 是【按粒子中心的计数估计】，不是相场在格子上的求和。两者在有界面宽度的
+//    体系里不等（中心法与 diffusion 界面的差别见 make_init.py 的 24% 提示）。
+//    要精确的局域体积分数得把 φ 在网格上求和，那是另一件事（需要 config.used）。
+// ---------------------------------------------------------------------------
+struct SedRow
+{
+    long   step;
+    double t;
+    double Vz_mean, Vz_std, Vz_min, Vz_max;
+    double z_cm, z_min, z_max, gap_min;
+};
+
+static void print_sed_profile(const std::vector<double>& zs, int K, double zlo, double zhi,
+                              double radius, double xi, int NxNy)
+{
+    const double dz = (zhi - zlo) / (double)K;
+    const double sphere = 4.0 / 3.0 * M_PI * radius * radius * radius;
+    const double diffuse = sphere + 8.0 * M_PI * radius * xi * xi * M_PI * M_PI / 24.0;
+    const double bin_vol = (double)NxNy * dz;
+
+    std::vector<double> cnt(K, 0.0);
+    for (size_t n = 0; n < zs.size(); n++)
+    {
+        int b = (int)std::floor((zs[n] - zlo) / dz);
+        if (b < 0) { b = 0; }
+        if (b >= K) { b = K - 1; }
+        cnt[b] += 1.0;
+    }
+    printf("\n  φ(z) 剖面（按粒子中心计数；两个约定都给）\n");
+    printf("    %-18s %6s %10s %10s\n", "z 区间", "计数", "φ(解析球)", "φ(扩散)");
+    for (int b = 0; b < K; b++)
+    {
+        if (cnt[b] == 0.0) { continue; }
+        const double z1 = zlo + b * dz, z2 = z1 + dz;
+        printf("    [%7.2f, %7.2f) %6.0f %10.4f %10.4f\n",
+               z1, z2, cnt[b],
+               cnt[b] * sphere / bin_vol, cnt[b] * diffuse / bin_vol);
+    }
+}
+
+static int cmd_sed_stats(int argc, char** argv)
+{
+    std::vector<const char*> files;
+    long win_lo = -1, win_hi = -1;
+    int  K = 16;
+    for (int i = 2; i < argc; i++)
+    {
+        if (strcmp(argv[i], "--window") == 0 && i + 2 < argc)
+        { win_lo = atol(argv[++i]); win_hi = atol(argv[++i]); }
+        else if (strcmp(argv[i], "--bins") == 0 && i + 1 < argc) { K = atoi(argv[++i]); }
+        else if (argv[i][0] == '-') { fprintf(stderr, "错误: 未知选项 %s\n", argv[i]); return 2; }
+        else { files.push_back(argv[i]); }
+    }
+    if (files.empty()) { fprintf(stderr, "错误: --sed-stats 需要至少一个 .fpd\n"); return 2; }
+    if (K < 1) { K = 1; }
+
+    std::vector<SedRow> rows;
+    std::vector<double> vz_series, step_series;
+    std::vector<double> z_all;          // 统计窗口内累积的粒子 z
+    int N_used = 0, NxNy = 0;
+    double radius = 0.0, xi = 0.0, dt = 0.0, Nz = 0.0;
+
+    for (size_t f = 0; f < files.size(); f++)
+    {
+        CkptHeader h;
+        std::string err;
+        if (!read_ckpt_header(files[f], h, err))
+        { fprintf(stderr, "错误: %s\n", err.c_str()); return 2; }
+
+        Holder H;
+        H.alloc(h);
+        if (!load_checkpoint(files[f], h, H.a, err))
+        { fprintf(stderr, "错误: %s\n", err.c_str()); return 2; }
+
+        const int N = h.N;
+        if (N <= 0) { continue; }
+        radius = h.radius; xi = h.xi; dt = h.dt; Nz = (double)h.Nz;
+        N_used = N; NxNy = h.Nx * h.Ny;
+
+        SedRow r;
+        r.step = (long)h.step;
+        r.t = (double)h.step * h.dt;
+        double sz = 0.0, sv = 0.0, sv2 = 0.0;
+        r.z_min = 1e300; r.z_max = -1e300;
+        r.Vz_min = 1e300; r.Vz_max = -1e300;
+        r.gap_min = 1e300;
+        for (int n = 0; n < N; n++)
+        {
+            sz += H.Rz[n]; sv += H.Vz[n]; sv2 += H.Vz[n] * H.Vz[n];
+            r.z_min = std::fmin(r.z_min, H.Rz[n]);
+            r.z_max = std::fmax(r.z_max, H.Rz[n]);
+            r.Vz_min = std::fmin(r.Vz_min, H.Vz[n]);
+            r.Vz_max = std::fmax(r.Vz_max, H.Vz[n]);
+            // 壁面间隙 h = (z ± 1/2) - a —— 与 Potential.h 的 wall_gap_* 同一约定。
+            // 这是「壁面势有没有托住粒子」的【唯一在线体检】。
+            const double hb = (H.Rz[n] + 0.5) - h.radius;
+            const double ht = ((double)h.Nz - 0.5 - H.Rz[n]) - h.radius;
+            r.gap_min = std::fmin(r.gap_min, std::fmin(hb, ht));
+        }
+        r.z_cm = sz / N;
+        r.Vz_mean = sv / N;
+        r.Vz_std = N > 1 ? std::sqrt(std::fmax((sv2 - N * r.Vz_mean * r.Vz_mean) / (N - 1), 0.0)) : 0.0;
+        rows.push_back(r);
+    }
+
+    if (rows.empty()) { fprintf(stderr, "错误: 没有可用的检查点（N=0？）\n"); return 2; }
+
+    // ⚠️ 按 step 排序，【不信任参数顺序】。shell glob 会把 init 文件（step=0）也带
+    //    进来，且排在最后；不排序的话「后一半窗口」会变成「init 那一个样本」，
+    //    而时间序列还会出现 step 回跳 —— 两种都是静默错统计。
+    for (size_t i = 1; i < rows.size(); i++)
+    {
+        SedRow key = rows[i];
+        size_t j = i;
+        while (j > 0 && rows[j - 1].step > key.step) { rows[j] = rows[j - 1]; j--; }
+        rows[j] = key;
+    }
+    for (size_t i = 1; i < rows.size(); i++)
+    {
+        if (rows[i].step == rows[i - 1].step)
+        {
+            fprintf(stderr,
+                    "错误: 有两个文件的 step 都是 %ld。最可能的原因是 glob 把初始构型\n"
+                    "      （如 out/sed_init.fpd，step=0）和同名检查点（out/sed_0000000.fpd）\n"
+                    "      一起带了进来。请收紧通配，例如 out/sed_[0-9]*.fpd\n", rows[i].step);
+            return 2;
+        }
+    }
+
+    // 缺省窗口：后一半（【排序之后】才定，且必须落在 rows 的 step 上，
+    // 否则会出现 win_hi < win_lo 这种「窗口里一个样本都没有」的静默空统计）
+    if (win_lo < 0)
+    {
+        win_lo = rows[rows.size() / 2].step;
+        win_hi = rows.back().step;
+    }
+
+    // 时间序列在【排序 + 定窗口之后】统一构建，保证顺序与窗口一致
+    for (size_t i = 0; i < rows.size(); i++)
+    {
+        if (rows[i].step >= win_lo && rows[i].step <= win_hi)
+        { vz_series.push_back(rows[i].Vz_mean); step_series.push_back(rows[i].t); }
+    }
+
+    printf("=== 沉降统计（%zu 个检查点，N=%d）===\n", rows.size(), N_used);
+    printf("  %9s %8s %11s %11s %11s %9s %9s %9s\n",
+           "step", "t", "<Vz>", "Vz_std", "z_cm", "z_min", "z_max", "min_gap");
+    for (size_t i = 0; i < rows.size(); i++)
+    {
+        const SedRow& r = rows[i];
+        printf("  %9ld %8.1f %11.5f %11.5f %11.4f %9.4f %9.4f %9.5f%s\n",
+               r.step, r.t, r.Vz_mean, r.Vz_std, r.z_cm, r.z_min, r.z_max, r.gap_min,
+               (r.step >= win_lo && r.step <= win_hi) ? "  *" : "");
+    }
+    printf("  （* = 参与统计窗口 step ∈ [%ld, %ld]）\n", win_lo, win_hi);
+
+    // 采样间隔必须按【物理时间】记账，否则 dt 越小样本越相关（CLAUDE.md 数值定则）。
+    // ⚠️ 从【全部检查点】的间距取，不从窗口序列取：窗口里只剩 1 个样本时会退化成
+    //    返回 dt，而真实间隔是 interval_ckpt*dt —— 那会把 tau_int 报小几个量级。
+    double samp_dt = 0.0;
+    if (rows.size() >= 2)
+    {
+        samp_dt = rows[1].t - rows[0].t;
+        for (size_t i = 2; i < rows.size(); i++)
+        {
+            const double d = rows[i].t - rows[i - 1].t;
+            if (std::fabs(d - samp_dt) > 1e-9 * std::fmax(samp_dt, 1.0))
+            { printf("  [注意] 检查点间隔不均匀（%.4f vs %.4f）——分块平均仍可用，"
+                     "但 tau_int 的解释要小心\n", samp_dt, d); break; }
+        }
+    }
+    printf("\n  采样间隔 = %.4f 物理时间单位（%zu 个样本，步长 %g）\n",
+           samp_dt, vz_series.size(), dt);
+
+    if (vz_series.size() < 20)
+    {
+        printf("  *** 样本数 %zu < 20，拒绝背书（n_b 不足时块方差本身相对误差 >16%%）***\n",
+               vz_series.size());
+    }
+    else
+    {
+        BlockStat bs[64];
+        const int ns = blocking_analysis(vz_series.data(), (int)vz_series.size(), bs, 64);
+        const BlockStat pk = pick_plateau(bs, ns, 20);
+        print_blocking(bs, ns, pk);
+        if (pk.block_len < 0)
+        {
+            printf("  *** 未找到分块平台 → 误差棒不可信，必须延长模拟（按设计拒绝背书）***\n");
+        }
+        else
+        {
+            printf("  <Vz>_plateau = %.6f ± %.6f   (b=%d, n_b=%d, tau_int=%.1f 采样间隔)\n",
+                   pk.mean, pk.stderr_mean, pk.block_len, pk.n_block, pk.tau_int_samp);
+            printf("  即 tau_int = %.2f 物理时间单位；b >= 10*tau_int 的硬约束 %s\n",
+                   pk.tau_int_samp * samp_dt,
+                   (pk.block_len >= 10.0 * pk.tau_int_samp) ? "满足" : "*** 不满足 ***");
+        }
+    }
+
+    // 全窗口的粒子 z 收集（用于 φ(z)）：重读一遍太浪费，这里只对窗口内的文件累加
+    // ⚠️ 位置分布是【稳态量】，必须只统计平台段；混入瞬态会让剖面失真。
+    for (size_t f = 0; f < files.size(); f++)
+    {
+        CkptHeader h;
+        std::string err;
+        if (!read_ckpt_header(files[f], h, err)) { continue; }
+        if ((long)h.step < win_lo || (long)h.step > win_hi) { continue; }
+        Holder H;
+        H.alloc(h);
+        if (!load_checkpoint(files[f], h, H.a, err)) { continue; }
+        for (int n = 0; n < h.N; n++) { z_all.push_back(H.Rz[n]); }
+    }
+    if (!z_all.empty())
+    {
+        print_sed_profile(z_all, K, -0.5, Nz - 0.5, radius, xi, NxNy);
+    }
+
+    // 间隙体检：壁面势托没托住
+    double gmin = 1e300;
+    for (size_t i = 0; i < rows.size(); i++) { gmin = std::fmin(gmin, rows[i].gap_min); }
+    printf("\n  全程最小壁面间隙 = %.5f", gmin);
+    if (gmin <= 0.0)      { printf("   *** 粒子已侵入壁面（壁面势失效）***\n"); }
+    else if (gmin < 0.5)  { printf("   [注意] 几乎贴壁，壁面势处于强排斥区\n"); }
+    else                  { printf("   壁面势托住了\n"); }
+
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     if (argc < 3) { usage(); return 2; }
@@ -255,6 +498,7 @@ int main(int argc, char** argv)
         if (argc < 4) { usage(); return 2; }
         return cmd_verify_forces(argv[2], argv[3]);
     }
+    if (strcmp(argv[1], "--sed-stats") == 0) { return cmd_sed_stats(argc, argv); }
     usage();
     return 2;
 }
