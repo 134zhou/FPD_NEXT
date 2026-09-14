@@ -16,14 +16,6 @@ int run_force_conservation_check(NS_Config cfg, PhiParams pp);
 // Phase 1 自检：多粒子重叠（N=2，C2 的判决性判据）（需要 GPU）
 int run_overlap_check(NS_Config cfg, PhiParams pp);
 
-// 测试 3A：纯流体噪声谱（无粒子，需要 GPU）
-int run_noise_check(int L, double dt, double kT, long n_steps);
-
-// 测试 3B：粒子能量均分（需要 GPU）
-enum EquipartMode { EQ_GHOST, EQ_FROZEN, EQ_MOVING };
-int run_equipartition_check(EquipartMode mode, int L, double dt, double kT,
-                            long n_steps, unsigned long long seed);
-
 // 势函数自检（纯 CPU，无卡可跑）：力=-dU/dr、黄金表、最小镜像、N=3、特征点
 int run_potential_check();
 
@@ -34,7 +26,7 @@ int run_force_pipeline_check(NS_Config cfg, PhiParams pp);
 // build_tridiag_coeffs + Thomas vs 稠密 Gauss，含 (0,0) 奇异列定规
 int run_check_tridiag();
 
-// Phase 7-A 压力泊松求解器自检（算子往返，需 GPU）：周期 + 壁面各一趟。
+// Phase 7-A 压力泊松求解器自检（算子往返，需 GPU）：壁面模式。
 // Nx<=0 时跑内置电池（偶/奇 Nz + 中盒子），否则只跑指定单盒。
 int run_check_poisson(int Nx, int Ny, int Nz);
 

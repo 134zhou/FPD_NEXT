@@ -1,0 +1,34 @@
+# 本次运行实际使用的配置（自动生成，可直接作为输入重跑）
+Nx = 32
+Ny = 32
+Nz = 32
+dt = 0.002
+n_steps = 5
+kT = 0.25
+radius = 3.2000000000000002
+xi = 1
+ratio_eta = 50
+gravity_z = 0
+gravity_x = 0
+gravity_y = 0
+gravity_compensate = -1
+boundary_z = noslip
+noise_on = 1
+potential = none
+init_file = out/init.fpd
+out_dir = /tmp/fpd_c2b/runW
+run_name = C2
+interval_ckpt = 1
+interval_log = 1000000
+save_pressure = 1
+seed = 20260905
+
+# ---- 以下为派生量，仅供记录，不是输入项 ----
+# derived wall_z            = 1   (boundary_z=noslip)
+# derived gravity_compensate = 0   (配置值 -1，-1 表示 auto)
+# derived inv_dt   = 500
+# derived W        = 15.811388300841896   (= sqrt(2*kT/dt))
+# derived inv_xi   = 1
+# derived range    = 8
+# derived n_range  = 17
+# derived range2   = 64

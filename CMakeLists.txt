@@ -57,7 +57,6 @@ add_executable(fpd_check
     tests/Analysis.cpp
     tests/CheckMain.cpp
     tests/CheckStencil.cpp
-    tests/CheckNoise.cpp
     tests/CheckPotential.cpp
     tests/CheckPoisson.cpp
     tests/CheckWall.cpp

@@ -1,12 +1,17 @@
 // fpd_check —— 自检与验证路径的独立可执行入口
 //
 //   fpd_check --check
+//   fpd_check --check-potential
+//   fpd_check --check-tridiag
+//   fpd_check --check-poisson [Nx Ny Nz]
+//   fpd_check --check-wall [Nx Ny Nz]
 //   fpd_check --lambda [L]
-//   fpd_check --noise [L] [dt] [kT] [steps]
-//   fpd_check --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]
 //
-// 从 fpd 拆出：main.cpp 里的四个自检路径 + --lambda 搬到这里，生产主循环
-// 留在 fpd。拆分后 fpd 的 main 只做配置解析 + run_production。
+// 从 fpd 拆出：main.cpp 里的自检路径搬到这里，生产主循环留在 fpd。
+// 拆分后 fpd 的 main 只做配置解析 + run_production。
+//
+// ⚠️ 原 --noise（测试 3A 纯流体噪声谱）与 --equipart（测试 3B 粒子能量均分）
+//    是【周期专属】判据，随 z 周期路径一起删除。见 PROGRESS.md 的覆盖损失记录。
 #include <iostream>
 #include <cstring>
 #include <cstdlib>
@@ -26,7 +31,7 @@ int main(int argc, char** argv)
     const double xi        = 1.0;
     const double ratio_eta = 50.0;
 
-    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, noise_on, /*wall_z=*/0);
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, noise_on, /*wall_z=*/1);
     PhiParams pp  = make_phi_params(radius, xi, ratio_eta);
 
     if (argc > 1 && std::strcmp(argv[1], "--check") == 0)
@@ -73,46 +78,13 @@ int main(int argc, char** argv)
     if (argc > 1 && std::strcmp(argv[1], "--lambda") == 0)
     {
         const int L_ = (argc > 2) ? std::atoi(argv[2]) : 32;
-        NS_Config c2 = make_ns_config(L_, L_, L_, dt, kT, noise_on, /*wall_z=*/0);
+        // ⚠️ L 必须大到测试粒子离两壁 >= range（相场模板盒的 z 向截断），
+        //    否则量到的是「被壁面截断的支撑域」而不是体相值。默认 32 足够。
+        NS_Config c2 = make_ns_config(L_, L_, L_, dt, kT, noise_on, /*wall_z=*/1);
         FpdConstants fc = compute_fpd_constants(pp, c2,
                                                 L_/2.0 + 0.3, L_/2.0 + 0.7, L_/2.0 + 0.5, 4);
         print_fpd_constants(fc, pp);
-
-        std::cout << "\n  能量均分目标（L=" << L_ << "）\n";
-        const double L3 = (double)L_ * L_ * L_;
-        std::printf("    2kT/M_i              = %.6e * kT\n", 2.0 / fc.mass_mean);
-        std::printf("    k=0 冻结修正 -2kT/L^3 = %.6e * kT   (%.3f%%)\n",
-                    -2.0 / L3, -fc.mass_mean / L3 * 100.0);
-        std::printf("    目标 <|V|^2>         = %.6e * kT\n",
-                    equipartition_target(fc, 1.0, c2));
         return 0;
-    }
-
-    // 测试 3B：--equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]
-    if (argc > 2 && std::strcmp(argv[1], "--equipart") == 0)
-    {
-        EquipartMode m;
-        if      (std::strcmp(argv[2], "ghost")  == 0) { m = EQ_GHOST;  }
-        else if (std::strcmp(argv[2], "frozen") == 0) { m = EQ_FROZEN; }
-        else if (std::strcmp(argv[2], "moving") == 0) { m = EQ_MOVING; }
-        else { std::cerr << "mode 必须是 ghost | frozen | moving\n"; return 2; }
-
-        const int    L_  = (argc > 3) ? std::atoi(argv[3]) : 32;
-        const double dt_ = (argc > 4) ? std::atof(argv[4]) : 0.002;
-        const double kT_ = (argc > 5) ? std::atof(argv[5]) : 0.25;
-        const long   ns_ = (argc > 6) ? std::atol(argv[6]) : 300000;
-        const unsigned long long sd_ = (argc > 7) ? std::strtoull(argv[7], 0, 10) : 1ULL;
-        return run_equipartition_check(m, L_, dt_, kT_, ns_, sd_);
-    }
-
-    // 测试 3A：--noise [L] [dt] [kT] [steps]
-    if (argc > 1 && std::strcmp(argv[1], "--noise") == 0)
-    {
-        const int    L_    = (argc > 2) ? std::atoi(argv[2]) : 32;
-        const double dt_   = (argc > 3) ? std::atof(argv[3]) : 0.01;
-        const double kT_   = (argc > 4) ? std::atof(argv[4]) : 1.0;
-        const long   nst_  = (argc > 5) ? std::atol(argv[5]) : 200000;
-        return run_noise_check(L_, dt_, kT_, nst_);
     }
 
     std::cerr << "用法: fpd_check --check\n"
@@ -120,8 +92,6 @@ int main(int argc, char** argv)
               << "      fpd_check --check-tridiag\n"
               << "      fpd_check --check-poisson [Nx Ny Nz]\n"
               << "      fpd_check --check-wall [Nx Ny Nz]\n"
-              << "      fpd_check --lambda [L]\n"
-              << "      fpd_check --noise [L] [dt] [kT] [steps]\n"
-              << "      fpd_check --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]\n";
+              << "      fpd_check --lambda [L]\n";
     return 2;
 }

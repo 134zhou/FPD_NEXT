@@ -180,12 +180,6 @@ void print_fpd_constants(FpdConstants fc, PhiParams pp)
            fabs(fc.int_phi[0] - i1) / i1);
 }
 
-double equipartition_target(FpdConstants fc, double kT, NS_Config cfg)
-{
-    const double L3 = (double)cfg.Nx * (double)cfg.Ny * (double)cfg.Nz;
-    return 2.0 * kT / fc.mass_mean - 2.0 * kT / L3;    // rho = 1
-}
-
 // ============================================================================
 // 分块平均
 // ============================================================================

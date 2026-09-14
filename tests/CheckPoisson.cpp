@@ -12,7 +12,7 @@
 //   --check-tridiag  纯 CPU，无卡可跑：三对角 Thomas + build_tridiag_coeffs
 //                    对照稠密 Gauss，含 (0,0) 奇异列的定规。
 //   --check-poisson  需 GPU：算子往返判据（手写 div∘grad 作用出右端，求解器
-//                    还原 p，两者只差一个常数）。周期与壁面各跑一遍。
+//                    还原 p，两者只差一个常数）。
 //
 // 独立实现约定（与 Potential.h 的 GPU/CPU 双实现同一条规矩）：这里的稠密 Gauss、
 // 手写 div∘grad 参考算子、主机 Thomas 都是【独立手写】，不调用生产求解器内部，
@@ -216,12 +216,14 @@ int run_check_tridiag()
 }
 
 // ============================================================================
-// 独立参考 3：手写离散算子 div∘grad（周期与壁面各一份，ghost 表述）。
-//   周期：km=(k-1+Nz)%Nz, kp=(k+1)%Nz
-//   壁面：km=(k==0?0:k-1), kp=(k==Nz-1?Nz-1:k+1)   （Neumann ghost p[-1]=p[0] 等）
-// 两者统一为  p[ip]+p[im]+p[jp]+p[jm]+p[kp]+p[km] - 6 p[ijk]。
+// 独立参考 3：手写离散算子 div∘grad（壁面：z 向 Neumann ghost）。
+//   km=(k==0?0:k-1), kp=(k==Nz-1?Nz-1:k+1)     （Neumann ghost p[-1]=p[0] 等）
+//   p[ip]+p[im]+p[jp]+p[jm]+p[kp]+p[km] - 6 p[ijk]
+//
+// ⚠️ 这是【手写的独立参考】，不许改成调用 Poisson.cpp 的代码 —— 那会把往返判据
+//    变成自洽的、盲的（CLAUDE.md 约束 3 点名的失效模式，约束 7 讲的正是这个算子）。
 // ============================================================================
-static void apply_operator(int Nx, int Ny, int Nz, bool wall, const double* p, double* b)
+static void apply_operator(int Nx, int Ny, int Nz, const double* p, double* b)
 {
     for (int k = 0; k < Nz; k++)
     {
@@ -232,8 +234,8 @@ static void apply_operator(int Nx, int Ny, int Nz, bool wall, const double* p, d
                 const int ijk = IDX(i, j, k);
                 const int ip = (i + 1) % Nx, im = (i - 1 + Nx) % Nx;
                 const int jp = (j + 1) % Ny, jm = (j - 1 + Ny) % Ny;
-                const int kp = wall ? (k == Nz - 1 ? Nz - 1 : k + 1) : (k + 1) % Nz;
-                const int km = wall ? (k == 0 ? 0 : k - 1)           : (k - 1 + Nz) % Nz;
+                const int kp = (k == Nz - 1) ? Nz - 1 : k + 1;
+                const int km = (k == 0)      ? 0      : k - 1;
                 b[ijk] = p[IDX(ip, j, k)] + p[IDX(im, j, k)]
                        + p[IDX(i, jp, k)] + p[IDX(i, jm, k)]
                        + p[IDX(i, j, kp)] + p[IDX(i, j, km)]
@@ -245,10 +247,10 @@ static void apply_operator(int Nx, int Ny, int Nz, bool wall, const double* p, d
 
 // 单个盒子的算子往返：随机 p_ref → 手写算子 → solve_pressure → 还原（只差常数）。
 // 返回失败数。
-static int roundtrip_grid(int Nx, int Ny, int Nz, int wall_z, const char* tag)
+static int roundtrip_grid(int Nx, int Ny, int Nz, const char* tag)
 {
     const int size = Nx * Ny * Nz;
-    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.001, 0.0, false, wall_z);
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.001, 0.0, false, /*wall_z=*/1);
 
     FpdState st;
     st.init(cfg, 0, ST_FULL, 12345ULL);
@@ -257,31 +259,23 @@ static int roundtrip_grid(int Nx, int Ny, int Nz, int wall_z, const char* tag)
     std::vector<double> p_ref((size_t)size);
     fill_rand(p_ref, (unsigned)(Nx * 1000 + Ny * 31 + Nz));
     std::vector<double> b((size_t)size);
-    apply_operator(Nx, Ny, Nz, wall_z != 0, p_ref.data(), b.data());
+    apply_operator(Nx, Ny, Nz, p_ref.data(), b.data());
 
     // 填 fft_data（复数交错，虚部 0）并上传
     for (int t = 0; t < size; t++) { st.h_fft[2 * t] = b[t]; st.h_fft[2 * t + 1] = 0.0; }
     #pragma acc update device(st.fft[0:2*size])
 
-    // 壁面模式的相容性诊断数组（设备侧长度 1）
+    // (0,0) 列的相容性诊断数组（设备侧长度 1）
     double diag_h[1] = { 0.0 };
-    double* diag = 0;
-    if (wall_z)
-    {
-        diag = diag_h;
-        #pragma acc enter data create(diag[0:1])
-    }
+    double* diag = diag_h;
+    #pragma acc enter data create(diag[0:1])
 
     solve_pressure(cfg, st.fft, st.tri_w, st.plan, st.plan_xy, st.p, diag);
 
     #pragma acc update self(st.p[0:size])
-    double compat = 0.0;
-    if (wall_z)
-    {
-        #pragma acc update self(diag[0:1])
-        compat = diag_h[0];
-        #pragma acc exit data delete(diag[0:1])
-    }
+    #pragma acc update self(diag[0:1])
+    const double compat = diag_h[0];
+    #pragma acc exit data delete(diag[0:1])
 
     st.finish();
 
@@ -302,13 +296,10 @@ static int roundtrip_grid(int Nx, int Ny, int Nz, int wall_z, const char* tag)
     const bool ok = mx < tol;
 
     std::printf("  %-56s %s\n", tag, ok ? "PASS" : "FAIL");
-    std::printf("      %dx%dx%d (wall_z=%d)   max|(p-p_ref)-mean| = %.3e   阈值 %.3e\n",
-                Nx, Ny, Nz, wall_z, mx, tol);
-    if (wall_z)
-    {
-        std::printf("      相容性残差 |Σb̂| = %.3e   （应 ~机器精度，非 O(1)）\n", compat);
-        if (compat > 1e-9) { g_fail++; }   // 相容投影没生效的硬信号
-    }
+    std::printf("      %dx%dx%d   max|(p-p_ref)-mean| = %.3e   阈值 %.3e\n",
+                Nx, Ny, Nz, mx, tol);
+    std::printf("      相容性残差 |Σb̂| = %.3e   （应 ~机器精度，非 O(1)）\n", compat);
+    if (compat > 1e-9) { g_fail++; }   // 相容投影没生效的硬信号
     return ok ? 0 : 1;
 }
 
@@ -352,7 +343,7 @@ static void check_compat_diag()
 }
 
 // ============================================================================
-// --check-poisson（需 GPU）：周期 + 壁面算子往返，覆盖偶/奇 Nz。
+// --check-poisson（需 GPU）：壁面算子往返，覆盖偶/奇 Nz。
 // ============================================================================
 int run_check_poisson(int Nx, int Ny, int Nz)
 {
@@ -365,18 +356,14 @@ int run_check_poisson(int Nx, int Ny, int Nz)
     if (Nx <= 0)
     {
         // 默认电池：偶 Nz、奇 Nz、中等盒子各一（奇偶不对称最容易在奇数 Nz 暴露）
-        g_fail += roundtrip_grid(8, 4, 6, 0, "P5 周期算子往返（偶 Nz）");
-        g_fail += roundtrip_grid(8, 4, 6, 1, "P5 壁面算子往返（偶 Nz）");
-        g_fail += roundtrip_grid(6, 6, 5, 0, "P5 周期算子往返（奇 Nz）");
-        g_fail += roundtrip_grid(6, 6, 5, 1, "P5 壁面算子往返（奇 Nz）");
-        g_fail += roundtrip_grid(16, 8, 8, 0, "P6 周期算子往返（中盒子）");
-        g_fail += roundtrip_grid(16, 8, 8, 1, "P6 壁面算子往返（中盒子）");
+        g_fail += roundtrip_grid(8, 4, 6, "P5 壁面算子往返（偶 Nz）");
+        g_fail += roundtrip_grid(6, 6, 5, "P5 壁面算子往返（奇 Nz）");
+        g_fail += roundtrip_grid(16, 8, 8, "P6 壁面算子往返（中盒子）");
         check_compat_diag();
     }
     else
     {
-        g_fail += roundtrip_grid(Nx, Ny, Nz, 0, "周期算子往返");
-        g_fail += roundtrip_grid(Nx, Ny, Nz, 1, "壁面算子往返");
+        g_fail += roundtrip_grid(Nx, Ny, Nz, "壁面算子往返");
         check_compat_diag();
     }
 

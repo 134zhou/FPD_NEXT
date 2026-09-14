@@ -299,6 +299,14 @@ int main(int argc, char** argv)
                      std::strcmp(argv[1], "--noise") == 0 ||
                      std::strcmp(argv[1], "--equipart") == 0))
     {
+        // --noise / --equipart 已随 z 周期路径【删除】，不再是迁移问题。
+        // 仍保留旧名字的识别，是为了给出「它没了」而不是「用法错误」的说明。
+        if (std::strcmp(argv[1], "--noise") == 0 || std::strcmp(argv[1], "--equipart") == 0)
+        {
+            std::cerr << argv[1] << " 已随 z 周期路径删除（它是周期专属判据）。"
+                      << "壁面侧的替代判据见 ./build/fpd_check --check-wall\n";
+            return 2;
+        }
         std::cerr << "自检/验证已迁移：请用 ./build/fpd_check " << argv[1] << " ...\n";
         return 2;
     }

@@ -653,28 +653,23 @@ static void w5p_fdt_extrapolated(int Nx, int Ny, int Nz)
     const double kT = 1.0;
     const double dts[3] = {0.02, 0.01, 0.005};
 
-    for (int mode = 0; mode < 2; mode++)
+    double r[3];
+    for (int q = 0; q < 3; q++)
     {
-        const bool wall = (mode != 0);
-        const char* mn = wall ? "壁面  " : "周期  ";
-        double r[3];
-        for (int q = 0; q < 3; q++)
-        {
-            char tag[64];
-            std::snprintf(tag, sizeof(tag), "%s %dx%dx%d", mn, Nx, Ny, Nz);
-            r[q] = fdt_matrix_identity(Nx, Ny, Nz, wall, kT, dts[q], /*gamma1=*/false, tag);
-        }
-        // 残差实测按 dt^p 衰减，dt→0 时归零。
-        // ⚠️ 不能用幂律拟合：壁面那一支在 dt 小到某个点时会【穿过零】变成负的
-        //    （trS 略低于 dim），log 取负数就出 nan。穿过零本身恰恰是「残差归零」
-        //    的证据。所以判据取|r| 单调下降 + 最小 dt 处足够小。
-        const double a[3] = { std::fabs(r[0]), std::fabs(r[1]), std::fabs(r[2]) };
-        const double p = fit_power(a[0], a[1], a[2], dts[0], dts[1], dts[2]);
-        std::printf("      → %s  |r| = %.4g / %.4g / %.4g（dt 递减）  幂次 p ≈ %.2f   "
-                    "最小 dt 处 |r| = %.2e\n", mn, a[0], a[1], a[2], p, a[2]);
-        check(a[0] > a[1] && a[1] > a[2] && a[2] < 2e-3,
-              "W5'a FDT 矩阵残差随 dt 单调下降，最小 dt 处 < 2e-3（dt→0 归零）");
+        char tag[64];
+        std::snprintf(tag, sizeof(tag), "壁面 %dx%dx%d", Nx, Ny, Nz);
+        r[q] = fdt_matrix_identity(Nx, Ny, Nz, /*wall=*/true, kT, dts[q], /*gamma1=*/false, tag);
     }
+    // 残差实测按 dt^p 衰减，dt→0 时归零。
+    // ⚠️ 不能用幂律拟合：壁面那一支在 dt 小到某个点时会【穿过零】变成负的
+    //    （trS 略低于 dim），log 取负数就出 nan。穿过零本身恰恰是「残差归零」
+    //    的证据。所以判据取|r| 单调下降 + 最小 dt 处足够小。
+    const double a[3] = { std::fabs(r[0]), std::fabs(r[1]), std::fabs(r[2]) };
+    const double p = fit_power(a[0], a[1], a[2], dts[0], dts[1], dts[2]);
+    std::printf("      → 壁面  |r| = %.4g / %.4g / %.4g（dt 递减）  幂次 p ≈ %.2f   "
+                "最小 dt 处 |r| = %.2e\n", a[0], a[1], a[2], p, a[2]);
+    check(a[0] > a[1] && a[1] > a[2] && a[2] < 2e-3,
+          "W5'a FDT 矩阵残差随 dt 单调下降，最小 dt 处 < 2e-3（dt→0 归零）");
 }
 
 // ---------------------------------------------------------------------------
@@ -696,10 +691,10 @@ static void w5p_fdt_extrapolated(int Nx, int Ny, int Nz)
 static double last_ratio = 0.0, last_sigma = 0.0;
 static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
                              bool gamma1, long n_steps, unsigned long long seed,
-                             bool wall = true, bool verbose = true)
+                             bool verbose = true)
 {
     NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, /*noise_on=*/true,
-                                   wall ? 1 : 0);
+                                   /*wall_z=*/1);
     cfg.noise_gamma1 = gamma1 ? 1 : 0;
 
     FpdState st;
@@ -708,9 +703,9 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
 
     const int size = Nx * Ny * Nz;
     // dim = n_v − rank(D) = n_v − size + 1（见 W5' 的推导）。
-    // 周期 n_v = 3·size；壁面 n_v = Nx·Ny·(3Nz−1)。
-    const double dim = wall ? (double)(Nx * Ny * (2 * Nz - 1) + 1)
-                            : (double)(2 * size + 1);
+    // 壁面 n_v = Nx·Ny·(3Nz−1)（上壁那一层 vz 不是自由度）。
+    // ⚠️ 这个 dim 与 doc/PressurePoisson.md §14.4 的自由度计数推导必须一致。
+    const double dim = (double)(Nx * Ny * (2 * Nz - 1) + 1);
 
     // 平衡时间：z 向 Neumann 的最长波长是 2H ⇒ k = π/H
     const double tau    = 1.0 / ((M_PI / (double)Nz) * (M_PI / (double)Nz));
@@ -746,8 +741,8 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
             for (int t = 0; t < size; t++)
             {
                 s += st.vx[t] * st.vx[t] + st.vy[t] * st.vy[t];
-                // 壁面模式下 vz 的上壁那一层不是自由度（恒 0，永不更新）
-                if (!wall || t / (Nx * Ny) != Nz - 1) { s += st.vz[t] * st.vz[t]; }
+                // 上壁那一层 vz 不是自由度（恒 0，永不更新）
+                if (t / (Nx * Ny) != Nz - 1) { s += st.vz[t] * st.vz[t]; }
             }
             series.push_back(s);
         }
@@ -761,7 +756,7 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
     const BlockStat pk = pick_plateau(bs, ns, 20);
 
     const double target = kT * dim;
-    const char* lbl = !wall ? "周期控制" : (gamma1 ? "壁面 γ≡1" : "壁面 γ=2");
+    const char* lbl = gamma1 ? "壁面 γ≡1" : "壁面 γ=2";
     if (pk.block_len < 0)
     {
         std::printf("      %-10s 未找到分块平台（误差棒不可信）→ 按设计拒绝背书 FAIL\n", lbl);
@@ -827,22 +822,18 @@ int run_check_wall(int Nx, int Ny, int Nz)
     std::printf("\n[W5'a] FDT 矩阵恒等式 P = M Mᵀ + B Bᵀ/kT（结构判据：幂等性 + dt^p 衰减）\n");
     w5p_fdt_extrapolated(4, 4, 4);
 
-    std::printf("\n[W5b] 壁面能量均分 + γ≡1 对照 + 周期控制（√2 的判决性判据）\n");
-    // 周期控制：同一套量测机器 + 同一个 dim 推导，只是没有壁面。它给出这台机器的
-    // 【系统性偏差基线】—— 见下面 criterion 的说明。
-    double r_per = 0.0, s_per = 0.0, r_g2 = 0.0, s_g2 = 0.0, r_g1 = 0.0, s_g1 = 0.0;
-    w5_wall_equipart(4, 4, 4, 0.002, 1.0, false, 300000, 1ULL, /*wall=*/false);
-    r_per = last_ratio; s_per = last_sigma;
-    w5_wall_equipart(4, 4, 4, 0.002, 1.0, false, 300000, 1ULL, /*wall=*/true);
+    std::printf("\n[W5b] 壁面能量均分 + γ≡1 对照（√2 的判决性判据）\n");
+    double r_g2 = 0.0, s_g2 = 0.0, r_g1 = 0.0, s_g1 = 0.0;
+    w5_wall_equipart(4, 4, 4, 0.002, 1.0, false, 300000, 1ULL);
     r_g2 = last_ratio; s_g2 = last_sigma;
-    w5_wall_equipart(4, 4, 4, 0.002, 1.0, true,  300000, 1ULL, /*wall=*/true);
+    w5_wall_equipart(4, 4, 4, 0.002, 1.0, true,  300000, 1ULL);
     r_g1 = last_ratio; s_g1 = last_sigma;
 
     // ⚠️ 判据的形态：**差分**，不是绝对。
-    //    4³ 小盒子里这台量测机器本身带 ~1.7% 的系统偏差（周期控制也落在 0.98），
-    //    来源是 dim 的约定（冻结模式数）+ 显式 Euler 的 O(dt) 偏差，与壁面无关。
-    //    所以能可靠交付的判据是「γ=2 是否被数据选中」，而不是「比值是否精确为 1」。
-    //    绝对一致需要更大的盒子 + dt 外推，本轮不做（已记入 PROGRESS.md 的遗留问题）。
+    //    4³ 小盒子里这台量测机器本身带 ~1.7% 的系统偏差，来源是 dim 的约定
+    //    （冻结模式数）+ 显式 Euler 的 O(dt) 偏差，与壁面无关。所以能可靠交付的
+    //    判据是「γ=2 是否被数据选中」，而不是「比值是否精确为 1」。
+    //    绝对一致需要更大的盒子 + dt 外推，见 PROGRESS.md 的遗留问题。
     {
         const double diff = r_g2 - r_g1;
         const double sd   = std::sqrt(s_g2 * s_g2 + s_g1 * s_g1);
@@ -850,16 +841,17 @@ int run_check_wall(int Nx, int Ny, int Nz)
         std::printf("      γ=2 与 γ=1 之差 = %+.4f ± %.4f  (%.1fσ)；"
                     "γ=2 更接近 1：%s\n", diff, sd, nsig, (r_g2 > r_g1) ? "是" : "否");
 
-        // ① 两者必须显著可分（否则本判据没有判别力）
+        // 两者必须显著可分（否则本判据没有判别力）
         check(nsig > 5.0 && r_g2 > r_g1,
               "W5 对照：γ=2 与 γ=1 显著可分且 γ=2 更接近 1（√2 被数据选中）");
-
-        // ② 壁面 γ=2 与周期控制的系统偏差必须同量级（壁面没有引入额外偏差）
-        const double dv = std::fabs(r_g2 - r_per);
-        const double sv = std::sqrt(s_g2 * s_g2 + s_per * s_per);
-        std::printf("      |壁面γ=2 − 周期控制| = %.4f ± %.4f  (%.1fσ)\n", dv, sv, dv / sv);
-        check(dv < 4.0 * sv, "W5 壁面 γ=2 与周期控制的系统偏差同量级（壁面无额外偏差）");
     }
+
+    // ⚠️ 这里曾有子判据②：「壁面 γ=2 与【周期控制】的系统偏差同量级」。
+    //    它靠同一台量测机器上的周期运行提供系统偏差基线。z 周期路径删除后
+    //    基线不存在了 —— 用硬编码常数替代会是【假判据】，所以直接删掉。
+    //    该残差就是显式 Euler 的 O(dt) 项，已由 W5'a 的 dt→0 外推独立证明。
+    //    更强的替代（留待后续）：把周期控制换成 dt 控制，跑 dt 与 dt/2，
+    //    断言 |ratio−1| 大致减半 —— 它识别偏差来源，而不是只比幅度。
 
     std::printf("\n%s\n", g_fail == 0 ? "全部通过" : "有失败项");
     return g_fail;
