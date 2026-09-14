@@ -267,13 +267,16 @@ struct SedRow
     double z_cm, z_min, z_max, gap_min;
 };
 
-static void print_sed_profile(const std::vector<double>& zs, int K, double zlo, double zhi,
-                              double radius, double xi, int NxNy)
+// ⚠️ zs 里累积的是【窗口内全部检查点】的粒子 z，所以除以 bin 体积【还必须再除以
+//    帧数】。漏掉这一步会得到 φ > 1 这种一眼假但没人会去核的数（帧越多越离谱）。
+static void print_sed_profile(const std::vector<double>& zs, int n_frames, int K,
+                              double zlo, double zhi, double radius, double xi, int NxNy)
 {
+    if (n_frames <= 0) { return; }
     const double dz = (zhi - zlo) / (double)K;
     const double sphere = 4.0 / 3.0 * M_PI * radius * radius * radius;
     const double diffuse = sphere + 8.0 * M_PI * radius * xi * xi * M_PI * M_PI / 24.0;
-    const double bin_vol = (double)NxNy * dz;
+    const double bin_vol = (double)NxNy * dz * (double)n_frames;
 
     std::vector<double> cnt(K, 0.0);
     for (size_t n = 0; n < zs.size(); n++)
@@ -283,14 +286,14 @@ static void print_sed_profile(const std::vector<double>& zs, int K, double zlo, 
         if (b >= K) { b = K - 1; }
         cnt[b] += 1.0;
     }
-    printf("\n  φ(z) 剖面（按粒子中心计数；两个约定都给）\n");
-    printf("    %-18s %6s %10s %10s\n", "z 区间", "计数", "φ(解析球)", "φ(扩散)");
+    printf("\n  φ(z) 剖面（按粒子中心计数，%d 帧平均；两个约定都给）\n", n_frames);
+    printf("    %-18s %8s %10s %10s\n", "z 区间", "每帧计数", "φ(解析球)", "φ(扩散)");
     for (int b = 0; b < K; b++)
     {
         if (cnt[b] == 0.0) { continue; }
         const double z1 = zlo + b * dz, z2 = z1 + dz;
-        printf("    [%7.2f, %7.2f) %6.0f %10.4f %10.4f\n",
-               z1, z2, cnt[b],
+        printf("    [%7.2f, %7.2f) %8.2f %10.4f %10.4f\n",
+               z1, z2, cnt[b] / (double)n_frames,
                cnt[b] * sphere / bin_vol, cnt[b] * diffuse / bin_vol);
     }
 }
@@ -456,6 +459,7 @@ static int cmd_sed_stats(int argc, char** argv)
 
     // 全窗口的粒子 z 收集（用于 φ(z)）：重读一遍太浪费，这里只对窗口内的文件累加
     // ⚠️ 位置分布是【稳态量】，必须只统计平台段；混入瞬态会让剖面失真。
+    int z_frames = 0;
     for (size_t f = 0; f < files.size(); f++)
     {
         CkptHeader h;
@@ -466,10 +470,11 @@ static int cmd_sed_stats(int argc, char** argv)
         H.alloc(h);
         if (!load_checkpoint(files[f], h, H.a, err)) { continue; }
         for (int n = 0; n < h.N; n++) { z_all.push_back(H.Rz[n]); }
+        z_frames++;
     }
     if (!z_all.empty())
     {
-        print_sed_profile(z_all, K, -0.5, Nz - 0.5, radius, xi, NxNy);
+        print_sed_profile(z_all, z_frames, K, -0.5, Nz - 0.5, radius, xi, NxNy);
     }
 
     // 间隙体检：壁面势托没托住
