@@ -13,7 +13,7 @@
 //
 // 布局（小端，裸二进制）：
 //   magic     char[8]   "FPDCKPT\0"
-//   version   uint32    1
+//   version   uint32    2
 //   endian    uint32    0x01020304        读端校验
 //   flags     uint32    bit0 = has_pressure
 //   Nx,Ny,Nz,N          int32 x4
@@ -33,15 +33,25 @@
 // ⚠️ 绝不存派生量 W / inv_dt / range / n_range。重启时重新过
 //    make_ns_config() / make_phi_params()，否则 C10/C6 的唯一真值源保证被绕过。
 //
+// ⚠️ 也绝不存 z 边界类型：v2 起它不再是变量（恒为无滑移壁面）。
+//
 // ⚠️ 数组是【一次 fread/fwrite】的连续块，不做三重循环。
 //    Python 侧 reshape 成 (Nz, Ny, Nx) —— x 是最后一维。
 // ============================================================================
 
+// ⚠️ version 1 → 2（Phase 8-A）：格式的【含义】变了，不是布局变了。
+//    v1 的存档可能是 z 周期构型（vz[...,Nz-1] 非 0）。那样的初态会直接破坏
+//    泊松的相容性条件 Σ_k b̂_k = 0，表现为压力的线性漂移，且【看不出错】。
+//    删掉 FPD_FLAG_WALL_Z 会留下这个静默失效的洞，所以改成升版本号：
+//    src/IOBin.cpp 与 tools/fpd_format.py 两侧【都已有】版本不符时的明确报错，
+//    旧存档因此响亮地失败，零新增代码，也不在 C++/Python 镜像里新增单侧逻辑。
 #define FPD_MAGIC       "FPDCKPT"
-#define FPD_VERSION     1u
+#define FPD_VERSION     2u
 #define FPD_ENDIAN_TAG  0x01020304u
 #define FPD_FLAG_PRESSURE 0x1u
-#define FPD_FLAG_WALL_Z   0x2u   // 该存档是 z 向无滑移壁面构型（vz[...,Nz-1] 必须为 0）
+// bit 0x2 曾用于 FPD_FLAG_WALL_Z。现已退役：【保留，不再复用】。
+// 复用一个旧位会让 v1 的存档被误判成某种新语义，正是版本号要防的事。
+#define FPD_FLAG_LEGACY_WALL_Z 0x2u
 
 struct CkptHeader
 {
@@ -55,7 +65,6 @@ struct CkptHeader
     uint64_t rng_draws = 0;
 
     bool   has_pressure() const { return (flags & FPD_FLAG_PRESSURE) != 0; }
-    bool   has_wall_z()   const { return (flags & FPD_FLAG_WALL_Z)   != 0; }
     size_t size() const { return (size_t)Nx * (size_t)Ny * (size_t)Nz; }
 };
 

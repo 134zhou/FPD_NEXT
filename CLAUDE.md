@@ -18,10 +18,9 @@ cmake -B build && cmake --build build -j     # nvc++ 26.3 + CUDA 13.1 + CMake 4.
 ./build/fpd config/smoke.cfg [--set k=v ...]  # 生产运行；--set 覆盖配置项
 ./build/fpd_check --check                     # 自检：力守恒 / 亚格点 / 混叠 / N=2 重叠 / 力链路
 ./build/fpd_check --check-potential           # 势函数自检（纯 CPU，无卡可跑）
-./build/fpd_check --check-wall                # z 向壁面 W1–W6 + W5'a/W5b（需 GPU）
+./build/fpd_check --check-wall                # z 向壁面 W1–W6 + W5'a/W5b + W7（需 GPU）
 ./build/fpd_check --lambda [L]                # 常量表 λ^T, M_i（纯 CPU，秒级）
-./build/fpd_check --noise [L] [dt] [kT] [steps]   # 测试 3A：纯流体噪声谱
-./build/fpd_check --equipart <ghost|frozen|moving> [L] [dt] [kT] [steps] [seed]   # 测试 3B
+# ⚠️ --noise（3A）与 --equipart（3B）是周期专属判据，已随 z 周期路径删除
 
 ./build/fpd_tool --dump-ckpt <f> [--at i j k] # 看 .fpd 头部 / 指定格点的值
 ./build/fpd_tool --diff-ckpt <a> <b>          # 逐位比较两个检查点
@@ -57,6 +56,7 @@ nvc++ -acc -O3 -Isrc/include -Minfo=accel -c src/X.cpp -o /tmp/x.o   # 看 kerne
 > ./build/fpd_tool --dump-ckpt /tmp/t.fpd --at 3 1 1     # 必须报 3001001
 > $PV/bin/pvpython tools/fpd2vtk.py --self-test          # 轴序与插值方向
 > ```
+> 版本号在 Phase 8-A 从 1 升到 2（周期存档的语义已不成立），**两侧必须同时改**。
 > `IDX = i + j*Nx + k*Nx*Ny` 意味着 numpy 必须 reshape 成 `(Nz, Ny, Nx)`，**x 是最后一维**。
 > 搞反不报错，只得到一个转置的场。FNV-1a 校验和同样是两处独立实现。
 
@@ -155,7 +155,8 @@ vector-reduction-over-j，零 atomic），求和顺序在固定 N 与固定 gang
 `src/Poisson.cpp` 与 `doc/PressurePoisson.md` **共同定义** `div∘grad` 算子（Phase 7-A
 引入的新漂移点，与 C++/Python 共同定义 `.fpd` 是同一类风险）。改求解器后必须：
 同步更新文档 §12 的公式 ↔ 代码对照表，并重跑 `./build/fpd_check --check-poisson`。
-归一化因子（周期 `size`、壁面 `Nx·Ny`）在 `solve_pressure` 里**只出现一次**，别散落。
+归一化因子（2D 批量变换的点数 `Nx·Ny`，**不是** `size`）在 `solve_pressure` 里
+**只出现一次**，别散落。
 壁面 `(0,0)` 奇异列用 `d_0 -= 1` 定规，**不许整列清零**（那会删掉支撑粒子重量的静压）。
 
 ### 8. `Wall.h` 是 z 向边界访问的唯一真值源
@@ -165,23 +166,30 @@ vector-reduction-over-j，零 atomic），求和顺序在固定 N 与固定 gang
 是同一类风险）。
 
 **不要在 `Stokes.cpp` 里重新手写 `k` 或 `k-1` 的 z 向访问。** 逻辑 `k` 的物理含义
-在周期/壁面两种模式下完全相同，只有存储映射不同 —— 手写一次就破坏这个不变量。
+与**存储映射**解耦（棱边数组 Nz+1 层、ghost 取值）—— 不变量是「写 `k`、`k-1` 的
+业务代码语义不随存储变化」，不是某一种布局。手写一次就破坏这个不变量。
+
+⚠️ `wz_edge_idx` **没有越界兜底**（原先周期臂的 `%Nz` 已随 Phase 8-A 删除）：
+`k ∉ [-1, Nz-1]` 就是无诊断的越界写，范围是**调用方的前置条件**。
 
 改完 `Wall.h` / `Stokes.cpp` / `Viscosity.cpp` 后**必须**跑
-`./build/fpd_check --check-wall`（含 W1/W2/W3/W4/W6/W5），并同步
+`./build/fpd_check --check-wall`（含 W1/W2/W3/W4/W4s/W6/W5'a/W5b/W7），并同步
 `doc/PressurePoisson.md` §14（公式 ↔ 代码对照表在那里）。
 
 几个不能忘的数：
 - 壁面剪切噪声因子 **γ=2（幅度 ×√2）**，只有 `EDGE_YZ`/`EDGE_ZX` 的两片壁面棱边需要。
   `Π_zz` 与 `Π_xy` **不需要**。推导见 §14.3，判据 W5b 用 γ≡1 对照证明它被数据选中
-- `dim = n_v − size + 1`（能量均分的目标 `⟨Σ|v|²⟩ = kT·dim`），周期/壁面通用
-- 棱边数组在壁面模式下是 `Nx·Ny·(Nz+1)`
+- `dim = n_v − size + 1`（能量均分的目标 `⟨Σ|v|²⟩ = kT·dim`）。
+  **两个地方必须一致**：`CheckWall.cpp` 的 `fdt_matrix_identity`（判据①）
+  与 `w5_wall_equipart`（`Nx·Ny·(2Nz−1)+1`）。推导见 §14.4
+- 棱边数组是 `Nx·Ny·(Nz+1)`
 
 ## 代码约定
 
 - **命名**：小写 = 流体场（`vx`、`fx`、`eta`），大写 = 粒子量（`Vx`、`Fx`、`Rx`）。贯穿全代码，别破坏
 - **注释用中文**，物理术语可混排英文。函数 `snake_case`，文件名 `PascalCase.cpp`，Allman 括号
-- **索引** `IDX(i,j,k) = i + j*Nx + k*Nx*Ny`，x 最快。与 `cufftPlan3d(Nz,Ny,Nx)` 匹配，**别动**
+- **索引** `IDX(i,j,k) = i + j*Nx + k*Nx*Ny`，x 最快。与 cuFFT 的 row-major 约定
+  （`cufftPlanMany` 的 `n = {Ny, Nx}`）匹配，**别动**
 - **单位**：格距 `dx ≡ 1`，密度 `ρ ≡ 1`，溶剂粘度 `η_ℓ ≡ 1`
 - 风格接近「带 vector 的 C」：裸指针 + OpenACC 手动映射，不用 class/智能指针/异常。
   新代码沿用，别引入现代 C++ 抽象（`Stencil.h` 的模板是唯一例外，且已验证不影响 kernel 生成）
@@ -209,6 +217,10 @@ vector-reduction-over-j，零 atomic），求和顺序在固定 N 与固定 gang
   **粒子侧（η_c=50）已由测试 3B 证明不会按扩散数放大 50 倍** ——
   实测 +0.5~0.7%，与流体式预期 0.67% 吻合。原因是粒子速度是 φ 支撑域上的低通平均，
   高 k 被滤掉，而偏差 `~ν k² dt/2` 对高 k 最大。**生产可用 dt = 0.002**
+  ⚠️ **产生这两个数字的判据（3A `--noise` / 3B `--equipart`）已在 Phase 8-A 删除。**
+  它们是**历史结论**，`baseline/phase3a_dt_scan.log` 与 `phase3b_equipart.log` 是
+  仅存的记录，**无法用剩下的判据重建**（W5'a 的残差是另一个量、另一种归一化）。
+  不要以为它们还受常驻判据保护 —— 见 `PROGRESS.md` 已知隐患 11
 - **平衡态统计的误差棒必须来自分块平均**。把相关样本当独立样本会低估约 7.5 倍。
   三条硬约束：`b ≥ 10τ_int`、`n_b ≥ 20`、冲突则**报 FAIL 要求延长，不许降标准接受**。
   采样间隔要在**物理时间**上固定（`samp_every = 0.5/dt`），否则 dt 越小样本越相关
@@ -219,9 +231,11 @@ vector-reduction-over-j，零 atomic），求和顺序在固定 N 与固定 gang
   理由是**自洽性**，不是格点不准 —— 格点其实精确到 5e-6。
   但**绝不能用解析球体 `(4/3)πa³`**：真值比它大 24.1%，那是扩散界面的曲率项
   （`+8πaξ²π²/24`），误用会让 `M_i` 差 24%，直接毁掉验证
-- **势截断半径必须 `rcut < min(Nx,Ny,Nz)/2`**（严格小于，等号会双重计数周期镜像）。
-  旧代码用 `cutoff = 3·Re = 22.2` 在它自己的 128×128×64 里合法，但**照搬到
-  `production.cfg` 的 128×64×32（min/2=16）就违反**。`validate_config` 已硬性拦截。
+- **势截断半径必须 `rcut < min(Nx,Ny)/2`**（严格小于，等号会双重计数周期镜像）。
+  ⚠️ **只有 x/y 是周期方向**，所以上界用 `min(Nx,Ny)` 而不是 `min(Nx,Ny,Nz)` ——
+  后者会无理由拒绝 z 向薄盒子。旧代码用 `cutoff = 3·Re = 22.2` 在它自己的
+  128×128×64 里合法，但**照搬到 `production.cfg` 的 128×64×32 就违反**。
+  `validate_config` 已硬性拦截。
   势残余力比 `|U'(rcut)|/max|U'| > 1e-6`（峰值取物理可达区 `[2a, rcut]`）会报警
 
 ## 粒子间势与外场
@@ -237,9 +251,10 @@ pot_alpha/pot_r_eq/pot_rcut/pot_shift`。
 - **参数查表**：`validate_config` 检查「用不到的势参数报错、需要的必须给」，不给默认值
   兜底；启动时打印势的完整解释（含残余力比）。Morse 宽度参数叫 `pot_alpha` 不叫 `a`
   （`a` 是粒子半径，README.md:21 的相场公式里就是）。
-- **外场** `gravity_x/y/z`（每粒子恒力）+ `gravity_compensate`（默认 1）：外场均匀时
-  Σ_n F = N·g ≠ 0，流体 k=0 被线性加速、整盒漂移，`bg = −ΣF/size` 抵消它。
-  **z 向无滑移壁面（Phase 7）上线后此开关默认转 0**（壁面提供真实动量汇）。
+- **外场** `gravity_x/y/z`（每粒子恒力）。背景力密度补偿 `bg = −ΣF/size` 恒为 0：
+  它解决的是**全周期**下「Σ_n F = N·g ≠ 0 使 k=0 线性加速、整盒漂移」，
+  而 z 向无滑移壁面本身就是真实的动量汇。配置项 `gravity_compensate` 已在
+  Phase 8-A 删除（auto 恒为 0，是个死开关）；`update_force_field` 的 `bg` 形参保留。
 
 `pair_energy_bare` 与 `pair_force_over_r_bare` 是**两份独立实现**（势 vs 解析导数），
 `--check-potential` 用四阶数值微分 + Python 黄金表交叉检验；`min_image` 在
@@ -248,15 +263,20 @@ pot_alpha/pot_r_eq/pot_rcut/pot_shift`。
 
 ## 当前进度（详见 `PROGRESS.md`）
 
-Phase 0/1/2/3/5 完成，**Phase 7 完成**（7-A 求解器 + 7-B 接线）。流体求解器、
-交错网格封装、噪声标定（3A + 3B）、配置系统、逐位断点重启、
-**粒子间相互作用力（WCA/Morse/LJ126 + 外场）**、
-**z 向无滑移壁面（`boundary_z = noslip`：切向 ghost + 壁面剪切噪声 ×√2 +
-相场按 `Loc` 截断 + 棱边数组 Nz+1 层）**均已通过数值判据。
+Phase 0/1/2/3/5/7 完成，**Phase 8-A 完成**。流体求解器、交错网格封装、配置系统、
+逐位断点重启、**粒子间相互作用力（WCA/Morse/LJ126 + 外场）**、
+**z 向无滑移壁面（切向 ghost + 壁面剪切噪声 ×√2 + 相场按 `Loc` 截断 +
+棱边数组 Nz+1 层）**均已通过数值判据。
 `FpdState` 已实现，自检拆成独立可执行 `fpd_check`。
 
-**下一步是 Phase 6（生产算例 + 旧代码对照）或 Phase 4（L 外推）**，无阻塞项。
-Phase 7-B 明确**未做**粒子-壁面排斥势（粒子靠初始构型远离壁面，越界报错中止）。
+**z 边界只有一种**：x/y 周期、z 上下无滑移硬壁。Phase 8-A 把三维 FFT 全周期路径
+（`boundary_z = periodic`、`NS_Config::wall_z`、`gravity_compensate`）**整条删除**，
+消除贯穿全代码的 `if (wall_z)` 二分。代价是 `--noise`(3A) / `--equipart`(3B)
+两个周期专属判据被删，**逐条记录在 `PROGRESS.md` 的「Phase 8-A」一节与已知隐患 11；
+`--equipart` 留下的粒子侧 FDT 空洞需要新推导（列为 Phase 6 首项 W7）**。
+
+**下一步是 Phase 6（生产算例 + 旧代码对照，建议先做 W7）或 Phase 4（L 外推）**，无阻塞项。
+明确**未做**粒子-壁面排斥势（粒子靠初始构型远离壁面，越界报错中止）。
 
 ## 工作方式
 

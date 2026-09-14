@@ -16,10 +16,14 @@
 import struct
 
 MAGIC       = b"FPDCKPT\0"
-VERSION     = 1
+# ⚠️ 1 → 2（Phase 8-A）：格式的含义变了 —— v1 的存档可能是 z 周期构型，
+#    其 vz[...,Nz-1] 非 0，会让压力泊松的相容性条件失效且看不出来。
+#    这里与 IOBin.cpp 的版本检查一起让它响亮地失败（两侧都要同步改）。
+VERSION     = 2
 ENDIAN_TAG  = 0x01020304
 FLAG_PRESSURE = 0x1
-FLAG_WALL_Z   = 0x2   # z 向无滑移壁面构型（与 IOBin.h 的 FPD_FLAG_WALL_Z 对应）
+# bit 0x2 曾用于 FLAG_WALL_Z（z 向无滑移壁面构型）。已退役，【保留不复用】。
+FLAG_LEGACY_WALL_Z = 0x2
 
 FNV_OFFSET = 14695981039346656037
 FNV_PRIME  = 1099511628211
@@ -71,10 +75,9 @@ def _fnv_bytes(h, buf):
 
 def default_header(Nx, Ny, Nz, N, dt=0.002, kT=0.25, radius=3.2, xi=1.0,
                    ratio_eta=50.0, noise_on=1, seed=1234, step=0,
-                   rng_draws=0, has_pressure=False, wall_z=False):
+                   rng_draws=0, has_pressure=False):
+    # z 边界不再是变量（v2 起恒为无滑移壁面），所以没有对应的标志位。
     flags = FLAG_PRESSURE if has_pressure else 0
-    if wall_z:
-        flags |= FLAG_WALL_Z
     return {
         "version": VERSION,
         "flags": flags,

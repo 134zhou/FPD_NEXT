@@ -1,5 +1,9 @@
 // spike：实测「xy 向批量 2D FFT + 手写 z 向 1D DFT」是否等价于 3D FFT。
 //
+// ⚠️ Phase 8-A 已把三维 FFT 全周期路径从主代码删除，本文件可用的 3D 对照随之消失
+//    —— 它是【历史记录】，不再可重跑。但 P2 的结论（forward→inverse 的放大因子
+//    精确等于 Nx*Ny 而非 Nx*Ny*Nz）仍然是 src/Poisson.cpp 归一化的承重证据。
+//
 // 背景：Phase 7-A 的壁面泊松求解器把 3D 全周期 FFT 换成
 //   (1) 沿每个 z-slab 做 2D FFT（cufftPlanMany，batch=Nz）
 //   (2) 对每个 (kx,ky) 模式在 z 向解三对角（Thomas）

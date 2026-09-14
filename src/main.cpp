@@ -26,8 +26,8 @@
 // 输入输出【只有】.fpd 一种格式：init 文件、检查点、重启文件都是它，
 // 文件里的 step 决定从哪继续。可视化由 tools/fpd2vtk.py 离线转换。
 //
-// 自检与验证路径（--check / --lambda / --noise / --equipart）已迁移到
-// 独立可执行 fpd_check（tests/CheckMain.cpp + CheckStencil.cpp + CheckNoise.cpp）。
+// 自检与验证路径（--check / --lambda 等）已迁移到独立可执行 fpd_check
+// （tests/Check*.cpp）。
 // ============================================================================
 static int run_production(const FpdConfig& c)
 {
@@ -58,16 +58,9 @@ static int run_production(const FpdConfig& c)
                       << "，配置文件要求 " << cfg.Nx << "x" << cfg.Ny << "x" << cfg.Nz << "\n";
             return 2;
         }
-        // 本构建只接受 z 向无滑移壁面构型。旧的 z 周期存档会得到一个物理上错误的
-        // 初态（典型是 vz[...,Nz-1] != 0，直接破坏泊松的相容性条件 Σ_k b̂_k = 0，
-        // 表现为压力的线性漂移），必须拒绝而不是静默采信 —— 见下面的硬检查。
-        if (!fh.has_wall_z())
-        {
-            std::cerr << "错误: " << c.init_file
-                      << " 不是 z 向无滑移壁面构型（FPD_FLAG_WALL_Z 未置位）。\n"
-                      << "      本版本删除了 z 周期路径，请用 tools/make_init.py 重新生成\n";
-            return 2;
-        }
+        // 旧的 z 周期存档由版本号（FPD_VERSION 1 → 2）在 read_ckpt_header 里
+        // 直接拒绝，不需要额外的标志位检查 —— 见 IOBin.h 的版本说明。
+        // 壁面不变量的【直接】检查在载入数组之后做（见下）。
         h = fh;
 
         // 配置里的 seed 优先 —— 否则 --set seed=... 会被 init 文件里的值静默吞掉。
@@ -111,6 +104,33 @@ static int run_production(const FpdConfig& c)
         st.Rx[0] = cfg.Nx / 2.0 + 0.3; st.Ry[0] = cfg.Ny / 2.0 + 0.7; st.Rz[0] = cfg.Nz / 2.0 + 0.5;
         st.Rux[0] = st.Rx[0]; st.Ruy[0] = st.Ry[0]; st.Ruz[0] = st.Rz[0];
         std::cout << "未指定 init_file，使用内置默认（单粒子放盒心）\n";
+    }
+
+    // 壁面不变量【直接】检查：上壁那一层 vz 必须逐位为 0。
+    //
+    // 这取代了原来的 FPD_FLAG_WALL_Z 标志位 —— 标志位从来只是这个不变量的【代理】，
+    // 而直接查不变量还能抓住手工构造、被别的工具改写、或将来损坏的 v2 文件，
+    // 那些情况标志位是拦不住的。破坏它的后果是泊松相容性 Σ_k b̂_k = 0 失效，
+    // 表现为压力的线性漂移，且看不出来。
+    {
+        // IDX 是宏，内部引用裸的 Nx/Ny，必须靠同名局部变量代入（照 Wall.h 的约定）
+        const int Nx = cfg.Nx, Ny = cfg.Ny;
+        int nbad = 0;
+        for (int j = 0; j < Ny; j++)
+        {
+            for (int i = 0; i < Nx; i++)
+            {
+                if (st.vz[IDX(i, j, cfg.Nz - 1)] != 0.0) { nbad++; }
+            }
+        }
+        if (nbad > 0)
+        {
+            std::cerr << "错误: " << (c.init_file.empty() ? std::string("内置默认初态") : c.init_file)
+                      << " 的 vz[:,:," << cfg.Nz - 1 << "] 有 " << nbad
+                      << " 个非零值。上壁法向速度必须恒 0，否则破坏泊松的相容性条件。\n";
+            st.finish();
+            return 2;
+        }
     }
 
     // st.init 在 load 之前 copyin 了初始 0；现在主机端有 load/默认 的值，推上去
@@ -160,8 +180,7 @@ static int run_production(const FpdConfig& c)
             // 仅供人读：实际使用的 offset 由 step 直接算出，读回时不采信此值
             oh.rng_draws = 2ULL * (unsigned long long)step
                          * 3ULL * (unsigned long long)h.size();
-            // 局部 struct 不能引用外层函数的局部变量，所以墙标志从 st.cfg 取
-            oh.flags = (c.save_pressure ? FPD_FLAG_PRESSURE : 0u) | FPD_FLAG_WALL_Z;
+            oh.flags = (c.save_pressure ? FPD_FLAG_PRESSURE : 0u);
 
             CkptArrays oa = st.ckpt_arrays();
             if (!c.save_pressure) { oa.p = 0; }
