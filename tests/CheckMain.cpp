@@ -26,7 +26,7 @@ int main(int argc, char** argv)
     const double xi        = 1.0;
     const double ratio_eta = 50.0;
 
-    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, noise_on);
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, noise_on, /*wall_z=*/0);
     PhiParams pp  = make_phi_params(radius, xi, ratio_eta);
 
     if (argc > 1 && std::strcmp(argv[1], "--check") == 0)
@@ -73,7 +73,7 @@ int main(int argc, char** argv)
     if (argc > 1 && std::strcmp(argv[1], "--lambda") == 0)
     {
         const int L_ = (argc > 2) ? std::atoi(argv[2]) : 32;
-        NS_Config c2 = make_ns_config(L_, L_, L_, dt, kT, noise_on);
+        NS_Config c2 = make_ns_config(L_, L_, L_, dt, kT, noise_on, /*wall_z=*/0);
         FpdConstants fc = compute_fpd_constants(pp, c2,
                                                 L_/2.0 + 0.3, L_/2.0 + 0.7, L_/2.0 + 0.5, 4);
         print_fpd_constants(fc, pp);

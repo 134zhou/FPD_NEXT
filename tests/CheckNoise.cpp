@@ -32,7 +32,7 @@
 // ============================================================================
 int run_noise_check(int L, double dt, double kT, long n_steps)
 {
-    NS_Config cfg = make_ns_config(L, L, L, dt, kT, true);
+    NS_Config cfg = make_ns_config(L, L, L, dt, kT, true, /*wall_z=*/0);
     PhiParams pp  = make_phi_params(3.2, 1.0, 50.0);   // 无粒子，仅占位
 
     const int size = L * L * L;
@@ -142,7 +142,7 @@ int run_equipartition_check(EquipartMode mode, int L, double dt, double kT,
     const char*  mname     = (mode == EQ_GHOST) ? "ghost"
                            : (mode == EQ_FROZEN) ? "frozen" : "moving";
 
-    NS_Config cfg = make_ns_config(L, L, L, dt, kT, true);
+    NS_Config cfg = make_ns_config(L, L, L, dt, kT, true, /*wall_z=*/0);
     PhiParams pp  = make_phi_params(3.2, 1.0, ratio_eta);
 
     const int  N    = 1;

@@ -68,9 +68,12 @@ static inline PhiParams make_phi_params(double radius, double xi, double ratio_e
 }
 
 // 由 dt 构造 NS_Config，保证 inv_dt 与 W 永远自洽（修 C10 / C6）
+//
+// ⚠️ wall_z 【没有默认值】，这是故意的：带默认值时漏写的调用点会静默取周期语义，
+//    在只支持壁面的构建里变成一个不报错的错误结果。去掉默认值让编译器穷举调用点。
 static inline NS_Config make_ns_config(int Nx, int Ny, int Nz,
                                        double dt, double kT, bool noise_on,
-                                       int wall_z = 0)
+                                       int wall_z)
 {
     NS_Config cfg;
     cfg.Nx = Nx; cfg.Ny = Ny; cfg.Nz = Nz;
