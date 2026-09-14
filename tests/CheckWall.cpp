@@ -9,6 +9,7 @@
 #include "Viscosity.h"
 #include "Force.h"
 #include "Velocity.h"
+#include "Potential.h"
 #include "Tests.h"
 #include "Analysis.h"
 
@@ -774,6 +775,301 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
 }
 
 // ============================================================================
+// W8：粒子-壁面排斥势
+//
+//   W8a  F_z(z) = -dU_wall/dz 的四阶数值微分对照。能量用本文件【独立手写】的
+//        间隙表达式（不调用 wall_gap_*，那正是被检验的对象），且对 z 求导而不是
+//        对 h —— 链式法则会自动产生符号结构，手写的符号错了这里立刻显形。
+//   W8b  上下壁镜像：F_z(Nz-1-z) == -F_z(z)，且壁面势在 x/y 上恒为 0
+//   W8c  体相逐位零力；且 wall_pot=none 时【所有】z 上逐位为 0（回归锚）
+//   W8d  静态力平衡：独立二分反解 z_rest，断言重力+壁面力为零，且两侧符号
+//        相反（吸引子）、且偏离时残差非零（判别力断言）
+//   W8e  GPU 与 CPU 两份装配在壁面开启时一致
+//
+// ⚠️ W8d 是【力平衡】判据，不是动力学判据。完整的「粒子真的沉到 z_rest」由生产
+//    算例端到端确认（见 PROGRESS 的 Phase 6），不放进单元判据 —— 流体驰豫时间
+//    τ ≈ (L/π)²/ν 是几万步量级，放进来会让 --check-wall 从 2 分钟变成几十分钟，
+//    而判据的判别力并不增加（力平衡是动力学的必要条件，且是这里唯一可精确判的量）。
+// ============================================================================
+
+// 本文件【独立手写】的壁面势能量，供 W8a 做数值微分对照。
+// ⚠️ 刻意不调用 Potential.h 的 wall_gap_bottom/top：那正是被检验的对象。
+//    这里用「中心到壁面的距离」写成 (z - z_wall) - a 的另一种展开式，
+//    能抓到「间隙定义差一个常数」这类错误。
+//    扫描区间保证 hb, ht > 0（h<=0 的物理无意义，且不在本判据的覆盖范围内）。
+static double u_wall_ref(const WallParams& w, int Nz, double z)
+{
+    const double zb = -0.5, zt = (double)Nz - 0.5;
+    const double hb = (z - zb) - w.radius;
+    const double ht = (zt - z) - w.radius;
+    return pair_energy(w.pot, hb * hb) + pair_energy(w.pot, ht * ht);
+}
+
+static void w8a_force_vs_energy()
+{
+    const int Nz = 32;
+    NS_Config cfg = make_ns_config(32, 32, Nz, 0.002, 0.0, false);
+    const double a = 3.2;
+
+    struct Case { const char* name; int type; int shift;
+                  double eps, sigma, De, alpha, r_eq, rcut; double z_lo, z_hi; };
+    // z_lo/z_hi 是扫描区间：必须整段落在 hb < rcut（也就是壁面势真的非零）之内，
+    // 否则整段都是恒 0，判据退化成空的。
+    const Case CS[3] = {
+        {"WCA shift=energy",  POT_WCA,   SHIFT_ENERGY, 1.0, 2.0, 0, 0, 0, 0, 3.0, 4.85},
+        {"Morse shift=force", POT_MORSE, SHIFT_FORCE,  0, 0, 5.0, 2.0, 1.5, 2.0, 3.0, 4.85},
+        {"LJ126 shift=force", POT_LJ126, SHIFT_FORCE,  1.0, 2.0, 0, 0, 0, 3.0, 3.0, 4.85},
+    };
+
+    for (int c = 0; c < 3; c++)
+    {
+        const Case& K = CS[c];
+        WallParams w;
+        w.pot    = make_potential_params(K.type, K.shift, K.eps, K.sigma,
+                                         K.De, K.alpha, K.r_eq, K.rcut);
+        w.radius = a;
+
+        const int npt = 400;
+        double max_err = 0.0, fmax = 0.0, fmin = 1e300;
+        for (int k = 0; k <= npt; k++)
+        {
+            const double z = K.z_lo + (K.z_hi - K.z_lo) * (double)k / (double)npt;
+            const double h = 1e-6 * z;
+
+            // dU/dz 的四阶中心差分：[-U(z+2h) + 8U(z+h) - 8U(z-h) + U(z-2h)]/(12h)
+            const double dUdz = ( -u_wall_ref(w, Nz, z + 2 * h)
+                                + 8.0 * u_wall_ref(w, Nz, z + h)
+                                - 8.0 * u_wall_ref(w, Nz, z - h)
+                                + u_wall_ref(w, Nz, z - 2 * h) ) / (12.0 * h);
+            // 保守力 F_z = -dU/dz。⚠️ 这个负号必须【从微分定义】来，不能照抄
+            //    wall_force_z 的写法 —— 抄了就把判据变成了自洽的、盲的。
+            const double num = -dUdz;
+            const double ana = wall_force_z(w, cfg, z);
+
+            // 混合容差：|F| 跨十几个量级，纯相对容差在小力端会被舍入淹没
+            const double denom = std::fmax(std::fabs(ana), 1.0);
+            const double err = std::fabs(num - ana) / denom;
+            if (err > max_err) { max_err = err; }
+            fmax = std::fmax(fmax, std::fabs(ana));
+            if (std::fabs(ana) > 1e-12) { fmin = std::fmin(fmin, std::fabs(ana)); }
+        }
+        std::printf("      %-18s 扫描 z∈[%g, %g]  max 相对差 = %.3e   |F| 跨 %.1e → %.1e\n",
+                    K.name, K.z_lo, K.z_hi, max_err, fmin, fmax);
+        // 覆盖率断言：力必须跨至少 2 个量级，否则「扫描区全在势外」会让判据变空
+        const bool covered = (fmax / std::fmax(fmin, 1e-300)) > 100.0;
+        check(max_err < 1e-6 && covered,
+              "W8a 壁面力 = -dU_wall/dz 四阶差分对照（力跨 ≥2 量级）");
+    }
+
+    // POT_NONE：壁面势关闭时 F_z 必须【逐位】为 0 —— 这是 S1 回归锚的单元形式
+    {
+        WallParams w = no_wall();
+        w.radius = a;
+        bool allzero = true;
+        for (int k = 0; k <= 400; k++)
+        {
+            const double z = 0.0 + 32.0 * (double)k / 400.0;
+            if (wall_force_z(w, cfg, z) != 0.0) { allzero = false; }
+        }
+        check(allzero, "W8a wall_pot=none 时 F_z 逐位为 0（所有 z）");
+    }
+}
+
+static void w8b_mirror_symmetry()
+{
+    const int Nz = 32;
+    NS_Config cfg = make_ns_config(32, 32, Nz, 0.002, 0.0, false);
+
+    WallParams w;
+    w.pot    = make_potential_params(POT_WCA, SHIFT_ENERGY, 1.0, 2.0, 0, 0, 0, 0);
+    w.radius = 3.2;
+
+    // 离散镜像 z -> Nz-1-z 把下壁映到上壁。整数/半整数位置上 (z+1/2) 与
+    // ((Nz-0.5)-z) 的计算【逐位相同】，所以这里可以断言逐位相等。
+    const double ZS[4] = {4.0, 4.5, 5.0, 3.75};
+    double worst_bit = 0.0, worst_sub = 0.0;
+    for (int k = 0; k < 4; k++)
+    {
+        const double z  = ZS[k];
+        const double zm = (double)(Nz - 1) - z;
+        const double f1 = wall_force_z(w, cfg, z);
+        const double f2 = wall_force_z(w, cfg, zm);
+        const double d  = std::fabs(f1 + f2);
+        if (k < 3) { worst_bit = std::fmax(worst_bit, d); }         // 逐位
+        else       { worst_sub = std::fmax(worst_sub, d / std::fmax(std::fabs(f1), 1.0)); }
+    }
+    std::printf("      整数/半整数镜像：|F_z(z) + F_z(Nz-1-z)| = %.3e（逐位）\n", worst_bit);
+    std::printf("      亚格点镜像 z=3.75：相对差 = %.3e（(z+0.5) 与 ((Nz-0.5)-z) 差 1 ulp）\n",
+                worst_sub);
+    check(worst_bit == 0.0, "W8b 上下壁镜像逐位反对称（整数/半整数位置）");
+    check(worst_sub < 1e-14, "W8b 上下壁镜像反对称（亚格点，容 1e-14）");
+}
+
+static void w8c_bulk_zero()
+{
+    const int Nz = 32;
+    NS_Config cfg = make_ns_config(32, 32, Nz, 0.002, 0.0, false);
+
+    WallParams w;
+    w.pot    = make_potential_params(POT_WCA, SHIFT_ENERGY, 1.0, 2.0, 0, 0, 0, 0);
+    w.radius = 3.2;
+    const double rcut = w.pot.rcut;
+
+    // 体相：min(hb, ht) > rcut ⇒ 两面壁都超出截断 ⇒ 逐位 0
+    const double z_lo = -0.5 + 3.2 + rcut + 1e-9;
+    const double z_hi = (double)Nz - 0.5 - 3.2 - rcut - 1e-9;
+    bool allzero = true;
+    for (int k = 0; k <= 200; k++)
+    {
+        const double z = z_lo + (z_hi - z_lo) * (double)k / 200.0;
+        if (wall_force_z(w, cfg, z) != 0.0) { allzero = false; }
+    }
+    std::printf("      体相 z∈[%.4f, %.4f]（rcut=%.4f）\n", z_lo, z_hi, rcut);
+    check(allzero, "W8c 体相内壁面力逐位为 0（不污染远离壁面的物理）");
+
+    // 边界刚过截断的【外侧】也必须为 0（守卫写反了会在这一侧漏）
+    const double z_out = -0.5 + 3.2 + rcut + 1e-6;
+    check(wall_force_z(w, cfg, z_out) == 0.0,
+          "W8c 恰好超出截断的外侧逐位为 0");
+}
+
+// W8d：静态力平衡。
+// z_rest 用【本文件自己的】二分反解（Config.cpp 的 wall_rest_gap 是 static，
+// 本文件根本调不到 —— 独立性是结构保证的，不是靠自觉）。
+static double w8d_solve_rest(const WallParams& w, NS_Config cfg, double gz)
+{
+    auto F = [&](double z) { return gz + wall_force_z(w, cfg, z); };
+    // 下界取「间隙 = 0.2*rcut」（力很大，F>0），上界取「间隙 = rcut」（F<0 由重力给）
+    double lo = -0.5 + w.radius + 0.2 * w.pot.rcut;
+    double hi = -0.5 + w.radius + 0.999 * w.pot.rcut;
+    for (int it = 0; it < 200; it++)
+    {
+        const double mid = 0.5 * (lo + hi);
+        if (F(mid) > 0.0) { lo = mid; } else { hi = mid; }
+    }
+    return 0.5 * (lo + hi);
+}
+
+static void w8d_static_balance()
+{
+    const int Nz = 32;
+    NS_Config cfg = make_ns_config(32, 32, Nz, 0.002, 0.0, false);
+    const double gz = -10.0;
+
+    WallParams w;
+    w.pot    = make_potential_params(POT_WCA, SHIFT_ENERGY, 1.0, 2.0, 0, 0, 0, 0);
+    w.radius = 3.2;
+
+    const double z_rest = w8d_solve_rest(w, cfg, gz);
+    const double f0 = gz + wall_force_z(w, cfg, z_rest);
+    std::printf("      z_rest = %.6f（间隙 %.6f）   F_total(z_rest) = %.3e\n",
+                z_rest, z_rest + 0.5 - w.radius, f0);
+    check(std::fabs(f0) < 1e-10 * std::fabs(gz),
+          "W8d 平衡点处 重力 + 壁面力 = 0（独立二分解出的 z_rest）");
+
+    // 吸引子：偏下必须被推上去（F_total > 0），偏上必须被推下来（F_total < 0）
+    const double d = 0.05;
+    const double fdn = gz + wall_force_z(w, cfg, z_rest - d);
+    const double fup = gz + wall_force_z(w, cfg, z_rest + d);
+    std::printf("      z_rest-%.2f: F_total = %+.4f   z_rest+%.2f: F_total = %+.4f\n",
+                d, fdn, d, fup);
+    check(fdn > 0.0 && fup < 0.0,
+          "W8d 平衡点是【吸引子】（下方被推回、上方被压下）");
+
+    // 判别力：残差随偏离线性增长，且不能处处为 0（否则上面的判据是空的）
+    const double d2 = 0.20;
+    const double f2 = gz + wall_force_z(w, cfg, z_rest - d2);
+    check(std::fabs(f2) > 100.0 * std::fabs(f0) && f2 > 0.0,
+          "W8d 判据非空：偏离 0.2 的残差比平衡点残差大 >100 倍");
+
+    // 刚度余量：这个势必须能在半个平衡间隙处提供远超重力的排斥
+    //（否则热涨落/一步的力脉冲就足以把粒子压穿，check_wall_bounds 会中止）
+    const double f_half = wall_force_z(w, cfg, -0.5 + w.radius + 0.5 * (z_rest + 0.5 - w.radius));
+    std::printf("      半间隙处排斥力 = %.3e   重力 = %.1f   倍数 = %.1e\n",
+                f_half, std::fabs(gz), f_half / std::fabs(gz));
+    check(f_half > 100.0 * std::fabs(gz),
+          "W8d 刚度余量：半间隙处排斥 > 100×重力（不会被压穿）");
+}
+
+// W8e：GPU 与 CPU 两份装配在壁面【开启】时一致，且壁面力把重力【精确】抵掉。
+//
+// 刻意把粒子间势关掉（pot = none）：粒子间力与壁面力混在一起时，前者可以大几个
+// 量级，会把后者的装配错误淹没（相对差仍小到「看起来通过」）。本判据要的就是
+// 单独照见壁面项。
+//
+// ⚠️ 诚实标注：GPU 与 CPU 共用 wall_force_z，所以本判据对「wall_force_z 内部公式
+//    错误」是【盲的】—— 那由 W8a 的四阶微分对照负责。这里能抓的是装配侧的遗漏：
+//    某一侧忘了加壁面项、加了两遍、或错误地放进了 j 归约。
+static void w8e_gpu_cpu_wall()
+{
+    const int Nx = 32, Ny = 32, Nz = 32;
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.002, 0.0, false);
+
+    const int N = 3;
+    WallParams w;
+    w.pot    = make_potential_params(POT_WCA, SHIFT_ENERGY, 1.0, 2.0, 0, 0, 0, 0);
+    w.radius = 3.2;
+    const PotentialParams pot = no_wall().pot;      // 关掉粒子间势，隔离壁面项
+    const ExternalField   ext{0.0, 0.0, -10.0};
+
+    const double z_rest = w8d_solve_rest(w, cfg, ext.gz);
+    FpdState st;
+    st.init(cfg, N, ST_STENCIL, 0);
+    // 下壁平衡点 / 体相 / 上壁平衡点（离散镜像）
+    const double RZ[3] = {z_rest, 15.5, (double)(Nz - 1) - z_rest};
+    for (int n = 0; n < N; n++)
+    {
+        st.Rx[n] = 16.3 + 5.0 * n; st.Ry[n] = 16.7; st.Rz[n] = RZ[n];
+    }
+    st.upload(ST_PARTICLE);
+
+    compute_particle_forces(cfg, pot, ext, w, N, st.Rx, st.Ry, st.Rz,
+                            st.Fx, st.Fy, st.Fz);
+    st.download(ST_PARTICLE);
+
+    double cFx[3], cFy[3], cFz[3];
+    compute_particle_forces_cpu(cfg, pot, ext, w, N,
+                                st.Rx, st.Ry, st.Rz, cFx, cFy, cFz);
+
+    double fmax = 0.0, dmax = 0.0;
+    for (int n = 0; n < N; n++)
+    {
+        fmax = std::fmax(fmax, std::fmax(std::fabs(st.Fx[n]),
+                                std::fmax(std::fabs(st.Fy[n]), std::fabs(st.Fz[n]))));
+        dmax = std::fmax(dmax, std::fabs(st.Fx[n] - cFx[n]));
+        dmax = std::fmax(dmax, std::fabs(st.Fy[n] - cFy[n]));
+        dmax = std::fmax(dmax, std::fabs(st.Fz[n] - cFz[n]));
+    }
+    const double rel = fmax > 0.0 ? dmax / fmax : 0.0;
+
+    std::printf("      下壁平衡点 z=%.4f  F_z = %+.3e\n", st.Rz[0], st.Fz[0]);
+    std::printf("      体相       z=%.4f  F_z = %+.3e\n", st.Rz[1], st.Fz[1]);
+    std::printf("      上壁平衡点 z=%.4f  F_z = %+.3e\n", st.Rz[2], st.Fz[2]);
+    std::printf("      GPU vs CPU 装配 max 相对差 = %.3e\n", rel);
+
+    check(rel < 1e-12, "W8e GPU 与 CPU 装配在壁面开启时一致");
+
+    // 定量断言①：下壁平衡点上【总力恰好为 0】—— 这就是沉降的力平衡，
+    // 跑在 GPU 装配路径上。壁面项被漏掉时这里会读到 -10，一目了然。
+    check(std::fabs(st.Fz[0]) < 1e-10,
+          "W8e 下壁平衡点上的总力 = 0（壁面力精确抵消重力）");
+
+    // 定量断言②：镜像位置上的壁面力必须【逐位反对称】⇒ 总力 = 2·g_z。
+    //
+    // ⚠️ 上壁【不存在】平衡点，这不是缺陷：上壁的排斥方向朝下（远离壁面），
+    //    与重力同向，两者叠加永远托不住粒子。只有下壁能承接沉降堆积。
+    //    把这里写成「上壁也应该平衡」会得到一个永远 FAIL 的假判据。
+    check(std::fabs(st.Fz[2] - 2.0 * ext.gz) < 1e-10,
+          "W8e 上壁镜像处壁面力反对称 ⇒ 总力 = 2·g_z（上壁无平衡点，符合物理）");
+
+    // 定量断言③：体相只受外场
+    check(std::fabs(st.Fz[1] - ext.gz) < 1e-12 && st.Fz[1] == cFz[1],
+          "W8e 体相粒子只受外场（壁面力逐位为 0）");
+
+    st.finish();
+}
+
+// ============================================================================
 // 入口。Nx<=0 时跑内置电池。
 // ============================================================================
 int run_check_wall(int Nx, int Ny, int Nz)
@@ -813,6 +1109,13 @@ int run_check_wall(int Nx, int Ny, int Nz)
 
     std::printf("\n[W6] z 向动量收支恒等式\n");
     w6_momentum_budget(Nx, Ny, Nz);
+
+    std::printf("\n[W8] 粒子-壁面排斥势\n");
+    w8a_force_vs_energy();
+    w8b_mirror_symmetry();
+    w8c_bulk_zero();
+    w8d_static_balance();
+    w8e_gpu_cpu_wall();
 
     // W5' 用小盒子：逐个注入单位向量的成本是 O(nv + nn) 次完整步进。
     // Nz 越小，壁面噪声那部分占的总方差比例越大，对 √2 的判别力越强

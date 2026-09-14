@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <cerrno>
 #include <fstream>
 #include <sstream>
@@ -34,6 +35,15 @@ std::vector<FieldDesc> config_fields(FpdConfig& c)
         {"pot_r_eq",       F_DOUBLE, &c.pot_r_eq,       false, "Morse 平衡距离 r_eq"},
         {"pot_rcut",       F_DOUBLE, &c.pot_rcut,       false, "LJ/Morse 截断半径（WCA 派生，不应给）"},
         {"pot_shift",      F_STRING, &c.pot_shift,      false, "截断移位: none|energy|force"},
+
+        {"wall_pot",       F_STRING, &c.wall_pot,       false, "粒子-壁面排斥势: none|wca|morse|lj126"},
+        {"wall_eps",       F_DOUBLE, &c.wall_eps,       false, "壁面势 WCA/LJ 的 ε"},
+        {"wall_sigma",     F_DOUBLE, &c.wall_sigma,     false, "壁面势 WCA/LJ 的 σ（自变量是表面间隙 h）"},
+        {"wall_De",        F_DOUBLE, &c.wall_De,        false, "壁面势 Morse 阱深 De"},
+        {"wall_alpha",     F_DOUBLE, &c.wall_alpha,     false, "壁面势 Morse 宽度参数 alpha"},
+        {"wall_r_eq",      F_DOUBLE, &c.wall_r_eq,      false, "壁面势 Morse 平衡间隙 r_eq"},
+        {"wall_rcut",      F_DOUBLE, &c.wall_rcut,      false, "壁面势 LJ/Morse 截断间隙（WCA 派生，不应给）"},
+        {"wall_shift",     F_STRING, &c.wall_shift,     false, "壁面势截断移位: none|energy|force"},
 
         {"init_file",      F_STRING, &c.init_file,      false, ".fpd 初始构型或续跑文件；留空用内置默认"},
         {"out_dir",        F_STRING, &c.out_dir,        false, "输出目录"},
@@ -230,21 +240,65 @@ bool apply_override(FpdConfig& c, const char* kv, std::string& err)
 }
 
 // 势参数查表的 helper：防「用不到的参数被静默忽略」。
-static bool is_pot_param(const std::string& key)
+//
+// ⚠️ 粒子间势（pot_* / potential）与壁面势（wall_* / wall_pot）【共用这三个函数】，
+//    靠 prefix + selector 参数区分。曾经想过复制一份 wall_ 版，否掉了 ——
+//    复制粘贴后各自漂移正是 C1/C2 的成因。
+//
+// selector 必须显式传：'potential' 不以 'pot_' 开头（天然被前缀判据排除），
+// 但 'wall_pot' 恰好以 'wall_' 开头，不排除就会被当成「用不到的势参数」报错。
+static bool is_pot_param(const std::string& key, const char* prefix, const char* selector)
 {
-    return key.size() > 4 && key.compare(0, 4, "pot_") == 0;
+    if (key == selector) { return false; }
+    const size_t n = std::strlen(prefix);
+    return key.size() > n && key.compare(0, n, prefix) == 0;
 }
-static bool potential_uses(const std::string& pot, const std::string& key)
+static bool potential_uses(const std::string& pot, const std::string& key,
+                           const char* prefix, const char* selector)
 {
-    if (pot == "wca")   { return key == "pot_eps" || key == "pot_sigma"; }
-    if (pot == "morse") { return key == "pot_De" || key == "pot_alpha" || key == "pot_r_eq" || key == "pot_rcut"; }
-    if (pot == "lj126") { return key == "pot_eps" || key == "pot_sigma" || key == "pot_rcut"; }
+    if (key == selector) { return false; }
+    auto p = [prefix](const char* suffix) { return std::string(prefix) + suffix; };
+    if (pot == "wca")   { return key == p("eps") || key == p("sigma"); }
+    if (pot == "morse") { return key == p("De") || key == p("alpha") || key == p("r_eq") || key == p("rcut"); }
+    if (pot == "lj126") { return key == p("eps") || key == p("sigma") || key == p("rcut"); }
     return false;
 }
 static bool was_given(const std::vector<std::string>& keys, const std::string& k)
 {
     for (size_t i = 0; i < keys.size(); i++) { if (keys[i] == k) { return true; } }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// 壁面势的平衡间隙 h_rest：二分反解 |F_wall(h)| = |g_z|。
+//
+// 两个用处：
+//   1. dump_config 的派生量行 —— 让人一眼看出「粒子会停在哪」（配错了立刻可见）
+//   2. 残余力比的采样下界（见 validate_config 里的注释）
+//
+// 用【单壁近似】：平衡点离壁必 < rcut <= Nz/2，所以对面那面壁的贡献恒为 0。
+// gz = 0 时没有平衡点（势把粒子推回体相），返回 false，调用方退回约定下界。
+// 势太软、在最深可达间隙仍压不住重力时也返回 false —— 那是【配置错误】，不是数值问题。
+// ---------------------------------------------------------------------------
+static bool wall_rest_gap(WallParams wp, double gz, double& h_rest)
+{
+    if (wp.pot.type == POT_NONE) { return false; }
+    const double target = std::fabs(gz);
+    if (target <= 0.0) { return false; }
+    if (wp.pot.rcut <= 0.0) { return false; }
+
+    // F(h) = pair_force_over_r(h²)·h 在 (0, rcut) 上单调递减：+∞ → 0
+    auto F = [&wp](double h) { return pair_force_over_r(wp.pot, h * h) * h; };
+    double lo = 1e-3 * wp.pot.rcut, hi = wp.pot.rcut;
+    if (F(lo) <= target) { return false; }   // 势太软：重力能压穿
+
+    for (int it = 0; it < 200; it++)
+    {
+        const double mid = 0.5 * (lo + hi);
+        if (F(mid) > target) { lo = mid; } else { hi = mid; }
+    }
+    h_rest = 0.5 * (lo + hi);
+    return true;
 }
 
 bool validate_config(const FpdConfig& c, std::string& err)
@@ -296,43 +350,68 @@ bool validate_config(const FpdConfig& c, std::string& err)
     }
 
     // --- 势函数检查：合法性 ---
-    if (c.potential != "none" && c.potential != "wca" && c.potential != "morse" && c.potential != "lj126")
+    // 粒子间势与壁面势共用同一套 enum 与同一段逻辑，只换 prefix/selector。
+    // 「加新势族要改三处、漏一处就静默」正是这个 helper 要消灭的东西。
+    struct PotFamily
     {
-        err = "potential 的合法取值是 none | wca | morse | lj126，收到 '" + c.potential + "'";
-        return false;
-    }
-    if (c.pot_shift != "none" && c.pot_shift != "energy" && c.pot_shift != "force")
+        const char* prefix;      // "pot_" / "wall_"
+        const char* selector;    // "potential" / "wall_pot"
+        const char* shift_key;   // "pot_shift" / "wall_shift"
+        const std::string* pot;  // 当前取值
+        const std::string* shift;
+    };
+    const PotFamily fams[2] = {
+        {"pot_",  "potential", "pot_shift",  &c.potential,  &c.pot_shift},
+        {"wall_", "wall_pot",  "wall_shift", &c.wall_pot,   &c.wall_shift},
+    };
+    for (int f = 0; f < 2; f++)
     {
-        err = "pot_shift 的合法取值是 none | energy | force，收到 '" + c.pot_shift + "'";
-        return false;
-    }
+        const PotFamily& F = fams[f];
+        const std::string& pn = *F.pot;
+        if (pn != "none" && pn != "wca" && pn != "morse" && pn != "lj126")
+        {
+            err = std::string(F.selector) + " 的合法取值是 none | wca | morse | lj126，收到 '" + pn + "'";
+            return false;
+        }
+        if (*F.shift != "none" && *F.shift != "energy" && *F.shift != "force")
+        {
+            err = std::string(F.shift_key) + " 的合法取值是 none | energy | force，收到 '" + *F.shift + "'";
+            return false;
+        }
 
-    // --- 参数查表：用不到的势参数报错（静默忽略是浪费一天的事故）---
-    for (size_t i = 0; i < c.keys_given.size(); i++)
-    {
-        const std::string& k = c.keys_given[i];
-        if (is_pot_param(k) && k != "pot_shift" && !potential_uses(c.potential, k))
+        // 用不到的势参数报错（静默忽略是浪费一天的事故）
+        for (size_t i = 0; i < c.keys_given.size(); i++)
         {
-            err = "potential = " + c.potential + " 用不到 " + k + "，请删掉它或改 potential";
-            return false;
+            const std::string& k = c.keys_given[i];
+            if (is_pot_param(k, F.prefix, F.selector) && k != F.shift_key &&
+                !potential_uses(pn, k, F.prefix, F.selector))
+            {
+                err = std::string(F.selector) + " = " + pn + " 用不到 " + k +
+                      "，请删掉它或改 " + F.selector;
+                return false;
+            }
         }
-    }
-    // 需要的势参数必须给（不给默认值兜底，与必填项一致）
-    {
-        const char* needed[4] = {0, 0, 0, 0};
-        if (c.potential == "wca")   { needed[0]="pot_eps";  needed[1]="pot_sigma"; }
-        if (c.potential == "morse") { needed[0]="pot_De";   needed[1]="pot_alpha"; needed[2]="pot_r_eq"; needed[3]="pot_rcut"; }
-        if (c.potential == "lj126") { needed[0]="pot_eps";  needed[1]="pot_sigma"; needed[2]="pot_rcut"; }
-        std::string missing;
-        for (int j = 0; j < 4; j++)
+        // 需要的势参数必须给（不给默认值兜底，与必填项一致）
         {
-            if (needed[j] && !was_given(c.keys_given, needed[j]))
-            { missing += (missing.empty() ? "" : ", "); missing += needed[j]; }
-        }
-        if (!missing.empty())
-        {
-            err = "potential = " + c.potential + " 需要 " + missing + "（势参数不给默认值兜底）";
-            return false;
+            auto p = [&F](const char* suffix) { return std::string(F.prefix) + suffix; };
+            std::string needed[4];
+            int nn = 0;
+            if (pn == "wca")   { needed[nn++] = p("eps"); needed[nn++] = p("sigma"); }
+            if (pn == "morse") { needed[nn++] = p("De");  needed[nn++] = p("alpha");
+                                 needed[nn++] = p("r_eq"); needed[nn++] = p("rcut"); }
+            if (pn == "lj126") { needed[nn++] = p("eps"); needed[nn++] = p("sigma"); needed[nn++] = p("rcut"); }
+            std::string missing;
+            for (int j = 0; j < nn; j++)
+            {
+                if (!was_given(c.keys_given, needed[j]))
+                { missing += (missing.empty() ? "" : ", "); missing += needed[j]; }
+            }
+            if (!missing.empty())
+            {
+                err = std::string(F.selector) + " = " + pn + " 需要 " + missing +
+                      "（势参数不给默认值兜底）";
+                return false;
+            }
         }
     }
 
@@ -380,6 +459,57 @@ bool validate_config(const FpdConfig& c, std::string& err)
         }
     }
 
+    // --- 壁面排斥势 ---
+    // 壁面是【非周期】的，所以上面那条最小镜像硬约束不适用（没有镜像可双重计数）。
+    if (c.wall_pot != "none")
+    {
+        WallParams wp = make_wall_params(c);
+
+        // 体相区长度 = Nz - 2*wall_rcut。小于 0 意味着每个粒子都同时受两面壁作用。
+        // 强受限体系可能【有意】如此，所以只警告不拒绝（与 dt 稳定性上界同一原则）。
+        if (2.0 * wp.pot.rcut > (double)c.Nz)
+        {
+            fprintf(stderr,
+                    "[警告] 2*wall_rcut = %g > Nz = %d：盒子里没有「同时离两壁都超过截断」"
+                    "的体相区，每个粒子都同时受两面壁作用。若非有意，请调小 wall_rcut "
+                    "或加大 Nz\n", 2.0 * wp.pot.rcut, c.Nz);
+        }
+
+        // 残余力比：|U'(rcut)| / max|U'|，> 1e-6 报警。
+        // ⚠️ 采样下界用【平衡间隙 h_rest】而不是 0。壁面势的物理可达区是
+        //    [h_rest, rcut]（粒子停在 h_rest 附近）。若照抄粒子间势用 [0, rcut]，
+        //    h→0 处 U' 大几个量级会把比值稀释到永远低于报警线，判据变成哑的。
+        if (c.wall_shift != "force")
+        {
+            double h_rest = 0.0;
+            const bool have_rest = wall_rest_gap(wp, c.gravity_z, h_rest);
+            if (c.gravity_z != 0.0 && !have_rest)
+            {
+                fprintf(stderr,
+                        "[警告] 壁面势在最深可达间隙处的排斥力仍小于 |gravity_z| = %g，"
+                        "粒子会在重力下压穿壁面势。请调大 wall_eps 或减小 gravity_z\n",
+                        std::fabs(c.gravity_z));
+            }
+            const double r_lo = have_rest ? h_rest : 0.1 * wp.pot.rcut;
+            double max_du = 0.0;
+            for (int k = 0; k <= 500; k++)
+            {
+                const double r  = r_lo + (wp.pot.rcut - r_lo) * (double)k / 500.0;
+                const double du = std::fabs(pair_force_over_r_bare(wp.pot, r) * r);
+                if (du > max_du) { max_du = du; }
+            }
+            const double du_rc   = std::fabs(pair_force_over_r_bare(wp.pot, wp.pot.rcut) * wp.pot.rcut);
+            const double rho_res = max_du > 0.0 ? du_rc / max_du : 0.0;
+            if (rho_res > 1e-6)
+            {
+                fprintf(stderr,
+                        "[警告] 壁面势在 wall_rcut=%g 处残余力比 |U'(rcut)|/max|U'| = %.3e "
+                        "> 1e-6（采样区间 [%g, %g]）。可改 wall_shift=force、调大 wall_rcut "
+                        "或调 wall_alpha\n", wp.pot.rcut, rho_res, r_lo, wp.pot.rcut);
+            }
+        }
+    }
+
     // 显式粘性项的稳定性上界，只警告不拒绝（用户可能在做 dt 扫描）
     const double dt_max = 1.0 / (2.0 * 3.0 * c.ratio_eta);
     if (c.dt > dt_max)
@@ -409,11 +539,22 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
     {
         // 跳过当前 potential 用不到的势参数：dump 出「用不到」会让 config.used
         // 重跑时 validate_config 报错（完整 dump vs 用不到报错的矛盾）。
+        // 粒子间势与壁面势各跑一遍，同一段逻辑（见 is_pot_param 的注释）。
         const std::string k = tab[i].key;
-        if (is_pot_param(k) && k != "potential")
         {
-            if (k == "pot_shift") { if (c.potential == "none") { continue; } }
-            else if (!potential_uses(c.potential, k)) { continue; }
+            struct { const char* prefix; const char* selector;
+                     const char* shift_key; const std::string* pot; } fams[2] = {
+                {"pot_",  "potential", "pot_shift",  &c.potential },
+                {"wall_", "wall_pot",  "wall_shift", &c.wall_pot  },
+            };
+            bool skip = false;
+            for (int f = 0; f < 2 && !skip; f++)
+            {
+                if (!is_pot_param(k, fams[f].prefix, fams[f].selector)) { continue; }
+                if (k == fams[f].shift_key) { skip = (*fams[f].pot == "none"); }
+                else { skip = !potential_uses(*fams[f].pot, k, fams[f].prefix, fams[f].selector); }
+            }
+            if (skip) { continue; }
         }
         ofs << tab[i].key << " = ";
         switch (tab[i].type)
@@ -446,6 +587,28 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
         ofs << "# potential       = " << c.potential << "   shift = " << c.pot_shift
             << "   rcut = " << potp.rcut << "\n";
         ofs << "#   U(rcut) = " << potp.u_at_rc << "   U'(rcut) = " << potp.dudr_at_rc << "\n";
+    }
+    if (c.wall_pot != "none")
+    {
+        WallParams wp = make_wall_params(c);
+        double h_rest = 0.0;
+        const bool have_rest = wall_rest_gap(wp, c.gravity_z, h_rest);
+        ofs << "# wall_pot        = " << c.wall_pot << "   shift = " << c.wall_shift
+            << "   rcut = " << wp.pot.rcut << "   a = " << wp.radius << "\n";
+        ofs << "#   U(rcut) = " << wp.pot.u_at_rc << "   U'(rcut) = " << wp.pot.dudr_at_rc << "\n";
+        // 平衡间隙是运维时唯一能一眼看出「壁面势配错了」的数（配软了压在壁上、
+        // 配硬了粒子悬在半空）。配不出平衡点时要明说，不能只留个空白。
+        ofs << "#   h_rest  = ";
+        if (have_rest)
+        {
+            ofs << h_rest << "   (解 |F_wall(h)| = |gravity_z| = "
+                << std::fabs(c.gravity_z) << ")\n";
+            ofs << "#   粒子中心静止高度 z_rest = " << (-0.5 + wp.radius + h_rest) << "\n";
+        }
+        else
+        {
+            ofs << "无（gravity_z = 0，或势太软压不住重力）\n";
+        }
     }
     ExternalField ext = make_external_field(c);
     if (ext.gx != 0.0 || ext.gy != 0.0 || ext.gz != 0.0)
@@ -491,6 +654,28 @@ PotentialParams make_potential_params(const FpdConfig& c)
 
     return make_potential_params(type, shift, c.pot_eps, c.pot_sigma,
                                  c.pot_De, c.pot_alpha, c.pot_r_eq, c.pot_rcut);
+}
+
+// 与 make_potential_params 逐字同构，只是换成 wall_* 字段。
+// ⚠️ 半径 a 取自 radius（同一个粒子半径）：间隙 h 的定义依赖它，必须同源。
+WallParams make_wall_params(const FpdConfig& c)
+{
+    int type;
+    if      (c.wall_pot == "wca")   { type = POT_WCA;   }
+    else if (c.wall_pot == "morse") { type = POT_MORSE; }
+    else if (c.wall_pot == "lj126") { type = POT_LJ126; }
+    else                            { type = POT_NONE;  }
+
+    int shift;
+    if      (c.wall_shift == "none")   { shift = SHIFT_NONE;   }
+    else if (c.wall_shift == "force")  { shift = SHIFT_FORCE;  }
+    else                               { shift = SHIFT_ENERGY; }
+
+    WallParams wp;
+    wp.pot    = make_potential_params(type, shift, c.wall_eps, c.wall_sigma,
+                                      c.wall_De, c.wall_alpha, c.wall_r_eq, c.wall_rcut);
+    wp.radius = c.radius;
+    return wp;
 }
 
 ExternalField make_external_field(const FpdConfig& c)

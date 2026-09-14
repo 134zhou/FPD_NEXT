@@ -231,12 +231,12 @@ int run_force_pipeline_check(NS_Config cfg, PhiParams pp)
     std::cout << std::scientific << std::setprecision(3);
 
     // (a)+(b) GPU 算两次逐位 + 与 CPU 参考对照
-    compute_particle_forces(cfg, pot, ext, N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz);
+    compute_particle_forces(cfg, pot, ext, no_wall(), N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz);
     st.download(ST_PARTICLE);
     double g0x[N], g0y[N], g0z[N];
     for (int n = 0; n < N; n++) { g0x[n] = st.Fx[n]; g0y[n] = st.Fy[n]; g0z[n] = st.Fz[n]; }
 
-    compute_particle_forces(cfg, pot, ext, N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz);
+    compute_particle_forces(cfg, pot, ext, no_wall(), N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz);
     st.download(ST_PARTICLE);
     bool bitwise = true;
     for (int n = 0; n < N && bitwise; n++)
@@ -245,7 +245,7 @@ int run_force_pipeline_check(NS_Config cfg, PhiParams pp)
     }
 
     double cFx[N], cFy[N], cFz[N];
-    compute_particle_forces_cpu(cfg, pot, ext, N, st.Rx, st.Ry, st.Rz, cFx, cFy, cFz);
+    compute_particle_forces_cpu(cfg, pot, ext, no_wall(), N, st.Rx, st.Ry, st.Rz, cFx, cFy, cFz);
     double fmax = 0.0, relmax = 0.0;
     for (int n = 0; n < N; n++)
     {

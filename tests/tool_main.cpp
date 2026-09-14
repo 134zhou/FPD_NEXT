@@ -147,6 +147,12 @@ static int cmd_diff(const char* pa, const char* pb)
         {"Vx", A.Vx.data(), B.Vx.data(), N},
         {"Vy", A.Vy.data(), B.Vy.data(), N},
         {"Vz", A.Vz.data(), B.Vz.data(), N},
+        // Fx/Fy/Fz 曾经漏掉。加粒子间力/壁面势之后，力是逐位重启对照里最该看的量
+        // —— 它是 R 的【原因】，R 逐位相同但 F 不同说明「同一构型下力算得不一样」，
+        // 那比轨迹漂移更早、更清楚地暴露问题。
+        {"Fx", A.Fx.data(), B.Fx.data(), N},
+        {"Fy", A.Fy.data(), B.Fy.data(), N},
+        {"Fz", A.Fz.data(), B.Fz.data(), N},
     };
 
     int nbad = 0;
@@ -204,10 +210,11 @@ static int cmd_verify_forces(const char* ckpt_path, const char* cfg_path)
 
     NS_Config cfg = make_ns_config(fc);
     PotentialParams pot = make_potential_params(fc);
+    WallParams wall = make_wall_params(fc);
     ExternalField ext = make_external_field(fc);
 
     std::vector<double> Fx(h.N), Fy(h.N), Fz(h.N);
-    compute_particle_forces_cpu(cfg, pot, ext, h.N,
+    compute_particle_forces_cpu(cfg, pot, ext, wall, h.N,
                                 holder.Rx.data(), holder.Ry.data(), holder.Rz.data(),
                                 Fx.data(), Fy.data(), Fz.data());
 
@@ -226,8 +233,8 @@ static int cmd_verify_forces(const char* ckpt_path, const char* cfg_path)
     const bool ok = maxabs < tol;
 
     printf("=== verify-forces %s ===\n", ckpt_path);
-    printf("  势 = %s  外场 = (%g, %g, %g)   N = %d\n",
-           fc.potential.c_str(), ext.gx, ext.gy, ext.gz, h.N);
+    printf("  势 = %s   壁面势 = %s   外场 = (%g, %g, %g)   N = %d\n",
+           fc.potential.c_str(), fc.wall_pot.c_str(), ext.gx, ext.gy, ext.gz, h.N);
     printf("  重算 F vs 文件 F: max |ΔF| = %.3e   阈值 %.3e   %s\n",
            maxabs, tol, ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;

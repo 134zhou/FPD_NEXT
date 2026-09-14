@@ -136,9 +136,10 @@ static int run_production(const FpdConfig& c)
     // st.init 在 load 之前 copyin 了初始 0；现在主机端有 load/默认 的值，推上去
     st.upload(ST_PARTICLE | ST_VELOCITY);
 
-    // 粒子间势与外场
-    const PotentialParams pot = make_potential_params(c);
-    const ExternalField  ext = make_external_field(c);
+    // 粒子间势、壁面势与外场
+    const PotentialParams pot  = make_potential_params(c);
+    const WallParams     wall = make_wall_params(c);
+    const ExternalField  ext  = make_external_field(c);
 
     // 背景力密度补偿恒为 0：无滑移壁面本身就是真实的动量汇，均匀外场的反冲由
     // 壁面吸收，不需要 bg = −ΣF/size 去抵消「整盒漂移」。
@@ -150,6 +151,12 @@ static int run_production(const FpdConfig& c)
     {
         std::cout << "势: " << c.potential << "   shift=" << c.pot_shift
                   << "   rcut=" << pot.rcut << std::endl;
+    }
+    if (c.wall_pot != "none")
+    {
+        std::cout << "壁面势: " << c.wall_pot << "   shift=" << c.wall_shift
+                  << "   rcut=" << wall.pot.rcut << "   a=" << wall.radius
+                  << "（自变量是表面间隙 h = z_壁 - a）" << std::endl;
     }
     if (ext.gx != 0.0 || ext.gy != 0.0 || ext.gz != 0.0)
     {
@@ -196,19 +203,31 @@ static int run_production(const FpdConfig& c)
 
     // 粒子越界检查。只在已经 download 过 ST_PARTICLE 的地方调用 ——
     // 不做每步的 device→host 同步（那会把 GPU 流水线打断）。
-    // ⚠️ 代价是检测延迟到下一个检查点/日志间隔。本轮不做壁面排斥势，粒子靠初始
-    //    构型远离壁面（make_init.py 的壁面边距）；等将来加了壁面势，粒子会在
-    //    碰到壁之前被弹回，这个检查退化成纯保险。
+    // ⚠️ 代价是检测延迟到下一个检查点/日志间隔。壁面势会把粒子在碰到壁之前弹回，
+    //    所以这个检查正常情况下是纯保险 —— 但保险必须留着：壁面势配软了（残余力比
+    //    报警那条）就压不住，重力会把粒子按穿，那时这里必须中止而不是继续跑。
+    // ⚠️ 壁面势开启时，合法区间【收紧】到「粒子表面不越过壁面」：z ∈ [-1/2+a, Nz-1/2-a]。
+    //    这不是洁癖。壁面势的自变量是间隙 h，而 pair_force_over_r 对负自变量
+    //    会给出【符号反向】的力（h<0 时 h² 仍为正，力把粒子往壁里推）——
+    //    一条无诊断的错物理路径。所以前置条件 h > 0 必须在这里兜住。
+    //    关闭壁面势时保持原判据（中心在盒内），不改变既有运行的语义。
+    const bool wall_active = (wall.pot.type != POT_NONE);
+    const double zlo = wall_active ? (-0.5 + wall.radius) : -0.5;
+    const double zhi = wall_active ? ((double)cfg.Nz - 0.5 - wall.radius)
+                                   : ((double)cfg.Nz - 0.5);
+
     auto check_wall_bounds = [&](long step) -> bool
     {
-        const double zlo = -0.5, zhi = (double)cfg.Nz - 0.5;
         for (int n = 0; n < N; n++)
         {
             if (st.Rz[n] < zlo || st.Rz[n] > zhi)
             {
                 std::cerr << "错误: step " << step << " 粒子 " << n
-                          << " 的 Rz = " << st.Rz[n] << " 越出壁面 [" << zlo
-                          << ", " << zhi << "]，粒子穿墙。中止（不 clamp）\n";
+                          << " 的 Rz = " << st.Rz[n] << " 越出允许区间 [" << zlo
+                          << ", " << zhi << "]"
+                          << (wall_active ? "（壁面势要求粒子表面不穿墙，h > 0）"
+                                          : "（粒子中心穿墙）")
+                          << "。中止（不 clamp）\n";
                 return true;
             }
         }
@@ -219,7 +238,7 @@ static int run_production(const FpdConfig& c)
     {
         // 力：用当前 device 上的 R 算 F（GPU 全程 device，无 host 往返）。
         // potential=none 且外场为零时 F 恒 0，与改动前数值路径逐位一致。
-        compute_particle_forces(cfg, pot, ext, N, st.Rx, st.Ry, st.Rz,
+        compute_particle_forces(cfg, pot, ext, wall, N, st.Rx, st.Ry, st.Rz,
                                 st.Fx, st.Fy, st.Fz);
 
         if (step % c.interval_ckpt == 0)
@@ -283,7 +302,7 @@ static int run_production(const FpdConfig& c)
     {
         // 循环里最后一次 update_particle_position 更新了 R，而 F 只在循环开头算。
         // 补算一次，保证「文件里的 F 对应文件里的 R」。
-        compute_particle_forces(cfg, pot, ext, N, st.Rx, st.Ry, st.Rz,
+        compute_particle_forces(cfg, pot, ext, wall, N, st.Rx, st.Ry, st.Rz,
                                 st.Fx, st.Fy, st.Fz);
         st.download(ST_VELOCITY | ST_PARTICLE);
         if (!writer.write(c.n_steps)) { rc = 2; }

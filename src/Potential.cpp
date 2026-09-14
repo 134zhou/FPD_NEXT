@@ -35,6 +35,7 @@ PotentialParams make_potential_params(int type, int shift,
 }
 
 void compute_particle_forces(NS_Config cfg, PotentialParams pot, ExternalField ext,
+                             WallParams wall,
                              int N,
                              const double* Rx, const double* Ry, const double* Rz,
                              double* Fx, double* Fy, double* Fz)
@@ -64,11 +65,13 @@ void compute_particle_forces(NS_Config cfg, PotentialParams pot, ExternalField e
         }
         Fx[i] = ext.gx + sx;
         Fy[i] = ext.gy + sy;
-        Fz[i] = ext.gz + sz;
+        // 壁面排斥：【按粒子】叠加，不进 j 归约（壁面不是粒子对）。
+        Fz[i] = ext.gz + sz + wall_force_z(wall, cfg, Rz[i]);
     }
 }
 
 void compute_particle_forces_cpu(NS_Config cfg, PotentialParams pot, ExternalField ext,
+                                 WallParams wall,
                                  int N,
                                  const double* Rx, const double* Ry, const double* Rz,
                                  double* Fx, double* Fy, double* Fz)
@@ -76,7 +79,14 @@ void compute_particle_forces_cpu(NS_Config cfg, PotentialParams pot, ExternalFie
     const double Lx = (double)cfg.Nx, Ly = (double)cfg.Ny;
     const double Lz = pbc_length_z(cfg);   // 壁面模式下退化为恒等映射（z 不折叠）
 
-    for (int n = 0; n < N; n++) { Fx[n] = ext.gx; Fy[n] = ext.gy; Fz[n] = ext.gz; }
+    // 与 GPU 版是两份独立装配（见 CLAUDE.md 约束 6）：这里的壁面项写在
+    // 逐粒子初始化循环里、用 wall_force_z，而 GPU 版写在 gang 循环末尾。
+    for (int n = 0; n < N; n++)
+    {
+        Fx[n] = ext.gx;
+        Fy[n] = ext.gy;
+        Fz[n] = ext.gz + wall_force_z(wall, cfg, Rz[n]);
+    }
     for (int i = 0; i < N; i++)
         for (int j = i + 1; j < N; j++)
         {
