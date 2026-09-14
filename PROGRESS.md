@@ -643,7 +643,7 @@ a/L=0.05 时 Hasimoto 有限尺寸修正是 **14% 偏差**，远大于要验证�
 ## 提交历史
 
 ```
-464038f  Phase 8-A S4: .fpd 版本 1->2 + 工具 + 文档
+2c0d9a2  Phase 8-A S4: .fpd 版本 1->2 + 工具 + 文档
 ada41fa  Phase 8-A S3: 删除三维 FFT 与 z 周期路径，塌缩全部分支
 9b16e28  Phase 8-A S2: 判据切到壁面 + 删周期专属测试 (--noise / --equipart)
 a4cd924  Phase 8-A S1: 删掉 make_ns_config 的 wall_z 默认值
