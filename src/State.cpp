@@ -26,8 +26,8 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
     const size_t nbN    = (size_t)nalloc * sizeof(double);
     const size_t nbSize = size * sizeof(double);
 
-    // 棱边数组（etaYZ/etaZX/pi_nx/pi_ny/randN 的两个分量）在壁面模式下多一层：
-    // 逻辑 k ∈ [-1, Nz-1] 共 Nz+1 层（含 z=∓1/2 两片壁面棱边）。周期下 == size。
+    // 棱边数组（etaYZ/etaZX/pi_nx/pi_ny/randN 的两个分量）多一层：
+    // 逻辑 k ∈ [-1, Nz-1] 共 Nz+1 层（含 z=∓1/2 两片壁面棱边）。见 Wall.h。
     esize = (size_t)wz_edge_size(cfg);
     nbEdge = esize * sizeof(double);
     slotD  = (size_t)wz_rand_slot_d(cfg);   // randD 长度（偶数）
@@ -61,7 +61,7 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
     {
         h_fx.assign(size, 0); h_fy.assign(size, 0); h_fz.assign(size, 0);
         h_eta.assign(size, 0); h_etaXY.assign(size, 0);
-        h_etaYZ.assign(esize, 0); h_etaZX.assign(esize, 0);   // 棱边：Nz+1 层（壁面模式）
+        h_etaYZ.assign(esize, 0); h_etaZX.assign(esize, 0);   // 棱边：Nz+1 层
         fx = h_fx.data(); fy = h_fy.data(); fz = h_fz.data();
         eta = h_eta.data(); etaXY = h_etaXY.data(); etaYZ = h_etaYZ.data(); etaZX = h_etaZX.data();
     }
@@ -84,13 +84,10 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
         fft = h_fft.data(); randD = h_randD.data(); randN = h_randN.data();
         diag = h_diag.data();
 
-        // 壁面模式：三对角前推系数（主机侧一次性预算，与右端无关）
-        if (cfg.wall_z)
-        {
-            h_tri_w.assign(size, 0);
-            tri_w = h_tri_w.data();
-            build_tridiag_coeffs(cfg, tri_w);
-        }
+        // z 向三对角前推系数（主机侧一次性预算，与右端无关）
+        h_tri_w.assign(size, 0);
+        tri_w = h_tri_w.data();
+        build_tridiag_coeffs(cfg, tri_w);
     }
 
     // --- 设备映射 ---
@@ -121,21 +118,17 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
         api_create(randD, slotD * sizeof(double));
         api_create(randN, slotN * sizeof(double));
         api_create(diag, sizeof(double));       // 单元素诊断量，create 即可（求解器整体覆写）
-        if (cfg.wall_z) { api_copyin(tri_w, nbSize); }
+        api_copyin(tri_w, nbSize);
     }
 
     // --- FFT plan + RNG ---
     if (want & ST_SOLVER)
     {
-        CUFFT_CHECK(cufftPlan3d(&plan, cfg.Nz, cfg.Ny, cfg.Nx, CUFFT_Z2Z));
-        // 壁面模式：xy 向批量 2D FFT（batch=Nz）。cuFFT row-major，n[] 最后一维最快，
+        // xy 向批量 2D FFT（batch=Nz）。cuFFT row-major，n[] 最后一维最快，
         // 我们 x 最快 ⇒ n={Ny,Nx}。z-slab 在 IDX 布局下天然连续（idist=Nx*Ny），无需重排。
-        if (cfg.wall_z)
-        {
-            int n[2] = { cfg.Ny, cfg.Nx };
-            CUFFT_CHECK(cufftPlanMany(&plan_xy, 2, n, NULL, 1, cfg.Nx * cfg.Ny,
-                                      NULL, 1, cfg.Nx * cfg.Ny, CUFFT_Z2Z, cfg.Nz));
-        }
+        int n[2] = { cfg.Ny, cfg.Nx };
+        CUFFT_CHECK(cufftPlanMany(&plan_xy, 2, n, NULL, 1, cfg.Nx * cfg.Ny,
+                                  NULL, 1, cfg.Nx * cfg.Ny, CUFFT_Z2Z, cfg.Nz));
         // 【统一 Philox】3A/3B 原来用 XORWOW（CURAND_RNG_PSEUDO_DEFAULT），
         // 生产用 Philox。CMakeLists 要求验证与生产走同一代码路径，且 XORWOW
         // 无法逐位重启（见 PROGRESS.md），故统一为 Philox。
@@ -156,7 +149,7 @@ void FpdState::finish()
         api_delete(randN, slotN * sizeof(double));
         api_delete(randD, slotD * sizeof(double));
         api_delete(fft, size * 2 * sizeof(double));
-        if (tri_w) { api_delete(tri_w, nbSize); tri_w = 0; }
+        api_delete(tri_w, nbSize); tri_w = 0;
         api_delete(tmp_fz, nbSize); api_delete(tmp_fy, nbSize); api_delete(tmp_fx, nbSize);
         api_delete(pi_nz, nbSize); api_delete(pi_ny, nbEdge); api_delete(pi_nx, nbEdge);
         api_delete(pi_dz, nbSize); api_delete(pi_dy, nbSize); api_delete(pi_dx, nbSize);
@@ -178,7 +171,6 @@ void FpdState::finish()
         api_delete(Ruz, nbN); api_delete(Ruy, nbN); api_delete(Rux, nbN);
         api_delete(Rz, nbN); api_delete(Ry, nbN); api_delete(Rx, nbN);
     }
-    if (plan) { CUFFT_CHECK(cufftDestroy(plan)); plan = 0; }
     if (plan_xy) { CUFFT_CHECK(cufftDestroy(plan_xy)); plan_xy = 0; }
     if (gen)  { CURAND_CHECK(curandDestroyGenerator(gen)); gen = 0; }
     parts = 0;

@@ -135,7 +135,7 @@ int run_check_tridiag()
     {
         const int Nx = grids[g][0], Ny = grids[g][1], Nz = grids[g][2];
         const int stride = Nx * Ny;
-        NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.001, 0.0, false, /*wall_z=*/1);
+        NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.001, 0.0, false);
 
         std::vector<double> tri_w((size_t)Nx * Ny * Nz);
         build_tridiag_coeffs(cfg, tri_w.data());
@@ -193,7 +193,7 @@ int run_check_tridiag()
     {
         // 重新跑一次 (0,0) 列的独立检查，得到可报告的数值
         const int Nx = 4, Ny = 4, Nz = 32, stride = Nx * Ny;
-        NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.001, 0.0, false, 1);
+        NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.001, 0.0, false);
         std::vector<double> tri_w((size_t)Nx * Ny * Nz);
         build_tridiag_coeffs(cfg, tri_w.data());
         std::vector<double> b(Nz);
@@ -250,7 +250,7 @@ static void apply_operator(int Nx, int Ny, int Nz, const double* p, double* b)
 static int roundtrip_grid(int Nx, int Ny, int Nz, const char* tag)
 {
     const int size = Nx * Ny * Nz;
-    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.001, 0.0, false, /*wall_z=*/1);
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.001, 0.0, false);
 
     FpdState st;
     st.init(cfg, 0, ST_FULL, 12345ULL);
@@ -270,7 +270,7 @@ static int roundtrip_grid(int Nx, int Ny, int Nz, const char* tag)
     double* diag = diag_h;
     #pragma acc enter data create(diag[0:1])
 
-    solve_pressure(cfg, st.fft, st.tri_w, st.plan, st.plan_xy, st.p, diag);
+    solve_pressure(cfg, st.fft, st.tri_w, st.plan_xy, st.p, diag);
 
     #pragma acc update self(st.p[0:size])
     #pragma acc update self(diag[0:1])
@@ -313,7 +313,7 @@ static void check_compat_diag()
 {
     const int Nx = 6, Ny = 4, Nz = 5;
     const int size = Nx * Ny * Nz;
-    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.001, 0.0, false, /*wall_z=*/1);
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.001, 0.0, false);
 
     FpdState st;
     st.init(cfg, 0, ST_FULL, 999ULL);
@@ -330,7 +330,7 @@ static void check_compat_diag()
     double* diag = diag_h;
     #pragma acc enter data create(diag[0:1])
 
-    solve_pressure(cfg, st.fft, st.tri_w, st.plan, st.plan_xy, st.p, diag);
+    solve_pressure(cfg, st.fft, st.tri_w, st.plan_xy, st.p, diag);
 
     #pragma acc update self(diag[0:1])
     const double compat = diag_h[0];

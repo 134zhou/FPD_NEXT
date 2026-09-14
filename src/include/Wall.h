@@ -6,13 +6,12 @@
 // ============================================================================
 // z 向边界的【唯一真值源】（Phase 7-B）
 //
-// 两种模式：
-//   wall_z = 0   z 向周期（x/y 本来就周期）
-//   wall_z = 1   z = -1/2 与 z = Nz-1/2 两片无滑移硬壁，x/y 仍周期
+// z 边界只有一种：z = -1/2 与 z = Nz-1/2 两片无滑移硬壁，x/y 周期。
+// （曾有的 wall_z=0 全周期分支在 Phase 8-A 随三维 FFT 路径一起删除。）
 //
-// 核心设计：**逻辑 k 的物理含义在两种模式下完全相同**（棱边/面心都是 z = k+1/2，
-// 体心是 z = k），只有【存储映射】不同。于是所有写 `k`、`k-1` 的物理代码语义一字
-// 不变，只是索引走本文件的 accessor。这是避免「整体重编号」那类静默漂移的关键。
+// 核心设计：**逻辑 k 的物理含义是 z = k+1/2（棱边/面心）或 z = k（体心）**，
+// 与存储映射解耦。于是所有写 `k`、`k-1` 的物理代码语义一字不变，只是索引走
+// 本文件的 accessor。这是避免「整体重编号」那类静默漂移的关键。
 //
 // 量按 z 半格偏移分三类：
 //   体心层  p, eta, Π_xx/yy/zz, vx/fx, vy/fy, etaXY, Π_xy   逻辑 k ∈ [0, Nz-1]   存 IDX
@@ -37,11 +36,11 @@
 // acc routine seq 里的引用参数会要求被引用对象位于设备内存）。
 // ============================================================================
 
-// 壁面模式下棱边数组的 z 层数（逻辑 k ∈ [-1, Nz-1] 共 Nz+1 个）
+// 棱边数组的 z 层数（逻辑 k ∈ [-1, Nz-1] 共 Nz+1 个）
 #pragma acc routine seq
 static inline int wz_edge_nz(NS_Config cfg)
 {
-    return cfg.wall_z ? cfg.Nz + 1 : cfg.Nz;
+    return cfg.Nz + 1;
 }
 
 // 棱边数组元素总数（也是 randN 每个分量的跨步）
@@ -52,40 +51,48 @@ static inline int wz_edge_size(NS_Config cfg)
 }
 
 // 棱边存储下标。逻辑 k 的物理位置是 z = k + 1/2，k ∈ [-1, Nz-1]。
-//   周期：k=-1 回绕到 Nz-1（与现布局逐位一致）
-//   壁面：平移 +1 存进 Nz+1 层，下壁落在槽位 0
+// 平移 +1 存进 Nz+1 层，下壁棱边落在槽位 0。
+//
+// ⚠️ 越界【没有被兜住】：这里没有任何回绕，k ∉ [-1, Nz-1] 就是一次无诊断的越界写。
+//    这份安全是【调用方的前置条件】而非访问器的性质 —— 删除周期分支时丢掉的
+//    正是原先 `%Nz` 提供的静默吸收。调用方必须自己保证范围（Stencil.h 先做
+//    球形+ZKind 判据，Stokes.cpp / Viscosity.cpp 的循环都在 [-1, Nz-1]）。
+//    `acc routine seq` 里做不了运行时检查。
 #pragma acc routine seq
 static inline int wz_edge_idx(NS_Config cfg, int i, int j, int k)
 {
     // 注意 IDX 是宏，内部引用裸的 Nx/Ny，必须靠同名局部变量代入
     const int Nx = cfg.Nx, Ny = cfg.Ny;
-    if (cfg.wall_z) { return i + j * Nx + (k + 1) * Nx * Ny; }
-    return IDX(i, j, (k + cfg.Nz) % cfg.Nz);
+    return i + j * Nx + (k + 1) * Nx * Ny;
 }
 
-// 棱边的 z 向下邻居的【逻辑】下标。周期回绕；壁面下不回绕（k=0 时给 -1，
-// 那正是下壁棱边，合法且必须被访问到）。
+// 棱边的 z 向下邻居的【逻辑】下标。z 向不再回绕（k=0 时给 -1，那正是下壁棱边，
+// 合法且必须被访问到）。
+//
+// ⚠️ 这个函数现在等价于 `k-1`，看着像求内联 —— 别内联。Stokes.cpp 里是
+//    `wz_edge_idx(cfg, i, j, wz_edge_km(cfg, k))` 的复合映射，一旦就地展开成
+//    `eb - Nx*Ny` 的指针算术，就破坏了「不在 Stokes.cpp 里手写 z 向访问」这条
+//    不变量（CLAUDE.md 约束 8 存在的全部理由）。
 #pragma acc routine seq
 static inline int wz_edge_km(NS_Config cfg, int k)
 {
-    if (cfg.wall_z) { return k - 1; }
-    return (k - 1 + cfg.Nz) % cfg.Nz;
+    (void)cfg;
+    return k - 1;
 }
 
 // 棱边逻辑 k 是否落在壁面上
 #pragma acc routine seq
 static inline int wz_edge_at_wall(NS_Config cfg, int k)
 {
-    if (!cfg.wall_z) { return 0; }
     return (k < 0 || k >= cfg.Nz) ? 1 : 0;
 }
 
-// z 面（vz/fz 的位置）是否被钉死。壁面模式下上壁那个元素存在但恒 0；
+// z 面（vz/fz 的位置）是否被钉死。上壁那个元素存在但恒 0；
 // 下壁（k=-1）根本不在数组里，由 wz_vz 就地返回 0。
 #pragma acc routine seq
 static inline int wz_pinned_zface(NS_Config cfg, int k)
 {
-    return (cfg.wall_z && k >= cfg.Nz - 1) ? 1 : 0;
+    return k >= cfg.Nz - 1 ? 1 : 0;
 }
 
 // --- 切向速度的 ghost 读取 -------------------------------------------------
@@ -96,7 +103,6 @@ static inline int wz_pinned_zface(NS_Config cfg, int k)
 static inline double wz_vx(NS_Config cfg, const double* vx, int i, int j, int k)
 {
     const int Nx = cfg.Nx, Ny = cfg.Ny;
-    if (!cfg.wall_z) { return vx[IDX(i, j, (k + cfg.Nz) % cfg.Nz)]; }
     if (k < 0)       { return -vx[IDX(i, j, 0)]; }
     if (k >= cfg.Nz) { return -vx[IDX(i, j, cfg.Nz - 1)]; }
     return vx[IDX(i, j, k)];
@@ -106,19 +112,17 @@ static inline double wz_vx(NS_Config cfg, const double* vx, int i, int j, int k)
 static inline double wz_vy(NS_Config cfg, const double* vy, int i, int j, int k)
 {
     const int Nx = cfg.Nx, Ny = cfg.Ny;
-    if (!cfg.wall_z) { return vy[IDX(i, j, (k + cfg.Nz) % cfg.Nz)]; }
     if (k < 0)       { return -vy[IDX(i, j, 0)]; }
     if (k >= cfg.Nz) { return -vy[IDX(i, j, cfg.Nz - 1)]; }
     return vy[IDX(i, j, k)];
 }
 
 // --- 法向速度：两壁恒 0 ----------------------------------------------------
-// 壁面模式下逻辑 k=-1 与 k>=Nz 都返回 0；数组里的 vz[Nz-1] 由主循环保证恒 0。
+// 逻辑 k=-1 与 k>=Nz 都返回 0；数组里的 vz[Nz-1] 由主循环保证恒 0。
 #pragma acc routine seq
 static inline double wz_vz(NS_Config cfg, const double* vz, int i, int j, int k)
 {
     const int Nx = cfg.Nx, Ny = cfg.Ny;
-    if (!cfg.wall_z) { return vz[IDX(i, j, (k + cfg.Nz) % cfg.Nz)]; }
     if (k < 0 || k >= cfg.Nz) { return 0.0; }
     return vz[IDX(i, j, k)];
 }
@@ -138,7 +142,7 @@ static inline double wz_noise_gamma(NS_Config cfg, int k)
 // ⚠️ curandGenerateNormalDouble 要求生成个数为【偶数】（Box–Muller 成对）。
 //    3*Nx*Ny*(Nz+1) 在奇数盒子上会是奇数（例如 3x3x3 的壁面盒 = 243），
 //    不取偶会在运行时报 CURAND_STATUS_LENGTH_NOT_MULTIPLE。
-//    取偶不改变前 n 个值，所以周期路径（本来就偶数）逐位不变。
+//    取偶不改变前 n 个值，所以 slot 的定位语义不受影响。
 static inline unsigned long long wz_even(unsigned long long n)
 {
     return (n + 1ULL) & ~1ULL;

@@ -3,16 +3,19 @@
 
 #include <cmath>
 
-// 索引约定：x 变化最快。与 main.cpp 的 cufftPlan3d(Nz, Ny, Nx) 匹配
+// 索引约定：x 变化最快。与 cuFFT 的 row-major 约定匹配：2D 批量变换
+// （cufftPlanMany，n = {Ny, Nx}）把 x 当最后一维，z-slab 在 IDX 下天然连续。
 #define IDX(i, j, k) ((i) + (j)*Nx + (k)*Nx*Ny)
 
 // --- 流体求解器参数（POD，按值进 GPU kernel）---
 struct NS_Config
 {
+    // z 边界【只有一种】：x/y 周期，z 上下无滑移硬壁。曾有的 wall_z 字段与
+    // 三维 FFT 全周期路径已于 Phase 8-A 整条删除 —— 单一语义 = 单一漂移面。
+    // z 向访问的唯一真值源是 Wall.h。
     int    Nx, Ny, Nz;
     double dt, inv_dt;
     double W;           // 噪声强度系数，应由 kT 派生：W = sqrt(2*kT/dt)
-    int    wall_z;      // 0 = z 周期（默认）；1 = z 上下无滑移壁面（Phase 7）
 
     // --- 判据专用开关（生产路径恒为默认值）---
     // adv_on = 0 关掉对流项：系统退化成【严格线性高斯】，于是
@@ -68,19 +71,14 @@ static inline PhiParams make_phi_params(double radius, double xi, double ratio_e
 }
 
 // 由 dt 构造 NS_Config，保证 inv_dt 与 W 永远自洽（修 C10 / C6）
-//
-// ⚠️ wall_z 【没有默认值】，这是故意的：带默认值时漏写的调用点会静默取周期语义，
-//    在只支持壁面的构建里变成一个不报错的错误结果。去掉默认值让编译器穷举调用点。
 static inline NS_Config make_ns_config(int Nx, int Ny, int Nz,
-                                       double dt, double kT, bool noise_on,
-                                       int wall_z)
+                                       double dt, double kT, bool noise_on)
 {
     NS_Config cfg;
     cfg.Nx = Nx; cfg.Ny = Ny; cfg.Nz = Nz;
     cfg.dt     = dt;
     cfg.inv_dt = 1.0 / dt;
     cfg.W      = noise_on ? sqrt(2.0 * kT / dt) : 0.0;
-    cfg.wall_z = wall_z;
     cfg.adv_on       = 1;
     cfg.noise_skip   = 0;
     cfg.noise_gamma1 = 0;

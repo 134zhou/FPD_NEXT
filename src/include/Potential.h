@@ -55,15 +55,22 @@ static inline double min_image(double d, double L)
     return d;
 }
 
-// z 向是否周期。壁面模式下最小镜像【不作用于 z】。
+// z 向最小镜像的长度。无滑移壁面下【最小镜像不作用于 z】。
 //
-// 实现上不新增分支到 O(N²) 内层：调用方把 Lz 传成一个足够大的数（1e300），
-// min_image 就自动退化为恒等映射（0.5*1e300 不溢出，且 |d| 永远小于它）。
-// 这样「最小镜像只有一份实现」这条不变量（PROGRESS.md 的关键决策）得以保住。
+// 实现上不新增分支到 O(N²) 内层：返回一个足够大的数（1e300），min_image 就自动
+// 退化为恒等映射（0.5*1e300 不溢出，且 |d| 永远小于它）。这样「最小镜像只有一份
+// 实现」这条不变量（PROGRESS.md 的关键决策）得以保住。
+//
+// ⚠️ 函数【必须保留】，不许内联成常量、也不许只在一侧删掉对它的调用：
+//    CLAUDE.md 约束 6 要求 compute_particle_forces（GPU）与
+//    compute_particle_forces_cpu 独立维护。若一侧保留了 z 映射、另一侧删了，
+//    CPU/GPU 对照判据【仍然通过】（两边都是恒等映射，判据是盲的），
+//    但「min_image 唯一真值源」的不变量没了，下一次编辑就会漂开。
 #pragma acc routine seq
 static inline double pbc_length_z(NS_Config cfg)
 {
-    return cfg.wall_z ? 1.0e300 : (double)cfg.Nz;
+    (void)cfg;
+    return 1.0e300;
 }
 
 // ---------------------------------------------------------------------------

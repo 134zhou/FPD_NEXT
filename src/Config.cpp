@@ -23,9 +23,7 @@ std::vector<FieldDesc> config_fields(FpdConfig& c)
         {"gravity_z",      F_DOUBLE, &c.gravity_z,      false, "z 向外场力（每粒子）"},
         {"gravity_x",      F_DOUBLE, &c.gravity_x,      false, "x 向外场力（每粒子）"},
         {"gravity_y",      F_DOUBLE, &c.gravity_y,      false, "y 向外场力（每粒子）"},
-        {"gravity_compensate", F_INT, &c.gravity_compensate, false,
-                                                   "-1=auto（periodic→1, noslip→0）| 0/1 显式"},
-        {"boundary_z",     F_STRING, &c.boundary_z,     false, "z 向边界: periodic|noslip（壁面）"},
+        {"boundary_z",     F_STRING, &c.boundary_z,     false, "z 向边界: noslip（唯一合法值）"},
         {"noise_on",       F_INT,    &c.noise_on,       false, "0/1，关掉则 W=0"},
 
         {"potential",      F_STRING, &c.potential,      false, "粒子间势: none|wca|morse|lj126"},
@@ -262,36 +260,37 @@ bool validate_config(const FpdConfig& c, std::string& err)
     if (c.interval_ckpt <= 0) { err = "interval_ckpt 必须为正"; return false; }
     if (c.interval_log  <= 0) { err = "interval_log 必须为正"; return false; }
 
-    // --- z 向边界 ---
-    if (c.boundary_z != "periodic" && c.boundary_z != "noslip")
+    // --- z 向边界：只有 noslip ---
+    // periodic 给出【专门的】「它被删了」而不是「取值不合法」—— 静默或含糊都是
+    // 本项目反复点名的事故类别。
+    if (c.boundary_z == "periodic")
     {
-        err = "boundary_z 的合法取值是 periodic | noslip，收到 '" + c.boundary_z + "'";
+        err = "boundary_z=periodic 已于 Phase 8-A 删除（三维 FFT 全周期路径随 z 周期"
+              "边界一起移除）。请改用 boundary_z = noslip（z 上下无滑移硬壁）或删掉这一行";
         return false;
     }
-    const bool wall = (c.boundary_z == "noslip");
-    if (wall && c.Nz < 2)
+    if (c.boundary_z != "noslip")
+    {
+        err = "boundary_z 的合法取值只有 noslip，收到 '" + c.boundary_z + "'";
+        return false;
+    }
+    if (c.Nz < 2)
     {
         err = "boundary_z=noslip 要求 Nz >= 2（两面壁之间至少要有 1 个自由 z 面）";
         return false;
     }
-    // 壁面提供真实动量汇，再叠加背景力密度等于双重扣除。显式写 1 直接拒绝
-    // （而不是静默改成 0）—— 「不做静默行为变更」是本项目的一贯规矩。
-    if (wall && c.gravity_compensate == 1)
-    {
-        err = "boundary_z=noslip 与 gravity_compensate=1 冲突：壁面已经提供真实的动量汇，"
-              "再叠加背景力密度 bg=-ΣF/size 等于双重扣除。"
-              "请删掉 gravity_compensate 这一行（默认 auto，壁面下取 0）或显式设为 0";
-        return false;
-    }
 
-    // 相场支撑域不能大到自己绕一圈碰到自己
+    // 相场支撑域：x/y 是周期的，粒子仍会通过周期边界与自己作用；z 向不周期，
+    // 但同样需要 Nz 装得下「离两壁都 >= range」的粒子。
     PhiParams pp = make_phi_params(c);
     const int nmin = c.Nx < c.Ny ? (c.Nx < c.Nz ? c.Nx : c.Nz) : (c.Ny < c.Nz ? c.Ny : c.Nz);
     if (pp.n_range > nmin)
     {
         std::ostringstream o;
         o << "盒子太小：相场模板盒边长 " << pp.n_range
-          << " 超过了最短的网格边 " << nmin << "（粒子会通过周期边界与自己作用）";
+          << " 超过了最短的网格边 " << nmin
+          << "（x/y 周期方向粒子会与自己作用；z 向也放不下离两壁各 "
+          << (pp.n_range / 2) << " 的粒子）";
         err = o.str();
         return false;
     }
@@ -338,18 +337,18 @@ bool validate_config(const FpdConfig& c, std::string& err)
     }
 
     // --- 最小镜像硬约束：rcut < min(N)/2（严格小于，等号会双重计数镜像）---
-    // ⚠️ 壁面模式下 z 不再周期，最小镜像【不作用于 z】⇒ Nz 不该参与这个上界。
+    // ⚠️ z 不再周期，最小镜像【不作用于 z】⇒ Nz 不该参与这个上界。
     //    用 min(Nx,Ny) 而不是 min(Nx,Ny,Nz)：否则 z 向薄盒子会被无理由拒绝。
     if (c.potential != "none")
     {
         PotentialParams potp = make_potential_params(c);
-        const int nmin_eff = wall ? (c.Nx < c.Ny ? c.Nx : c.Ny) : nmin;
+        const int nmin_eff = c.Nx < c.Ny ? c.Nx : c.Ny;
         const double half = 0.5 * (double)nmin_eff;
         if (potp.rcut >= half)
         {
             std::ostringstream o;
-            o << "势截断 rcut = " << potp.rcut << " 不小于最短（周期）网格边的一半 " << half
-              << "（周期方向取 min(" << (wall ? "Nx,Ny" : "Nx,Ny,Nz") << ") = " << nmin_eff
+            o << "势截断 rcut = " << potp.rcut << " 不小于最短周期网格边的一半 " << half
+              << "（周期方向只有 x/y，取 min(Nx,Ny) = " << nmin_eff
               << "），最小镜像约定不成立"
               << "（旧代码 cutoff=22.2 配 Nz=32 正是这个错误）";
             err = o.str();
@@ -433,10 +432,8 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
     PhiParams pp = make_phi_params(c);
     ofs << "\n# ---- 以下为派生量，仅供记录，不是输入项 ----\n";
     ofs.precision(17);
-    ofs << "# derived wall_z            = " << ns.wall_z
-        << "   (boundary_z=" << c.boundary_z << ")\n";
-    ofs << "# derived gravity_compensate = " << gravity_compensate_of(c)
-        << "   (配置值 " << c.gravity_compensate << "，-1 表示 auto)\n";
+    ofs << "# z 向边界        = noslip (x/y 周期，z 上下无滑移硬壁)\n";
+    ofs << "# 背景力密度补偿  = 0 (无滑移壁面本身就是真实的动量汇)\n";
     ofs << "# derived inv_dt   = " << ns.inv_dt << "\n";
     ofs << "# derived W        = " << ns.W      << "   (= sqrt(2*kT/dt))\n";
     ofs << "# derived inv_xi   = " << pp.inv_xi << "\n";
@@ -453,8 +450,7 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
     ExternalField ext = make_external_field(c);
     if (ext.gx != 0.0 || ext.gy != 0.0 || ext.gz != 0.0)
     {
-        ofs << "# external_field  = (" << ext.gx << ", " << ext.gy << ", " << ext.gz
-            << ")   compensate = " << c.gravity_compensate << "\n";
+        ofs << "# external_field  = (" << ext.gx << ", " << ext.gy << ", " << ext.gz << ")\n";
     }
     return true;
 }
@@ -470,23 +466,9 @@ void print_config_help()
     }
 }
 
-// boundary_z 字符串 -> wall_z 整数。这是【唯一】的转换点。
-int wall_z_of(const FpdConfig& c)
-{
-    return (c.boundary_z == "noslip") ? 1 : 0;
-}
-
-// gravity_compensate 的 auto 解析（-1 -> 由 boundary_z 决定）。唯一转换点。
-// 调用方【必须】把它打印出来 —— 静默是本项目反复点名的事故类别。
-int gravity_compensate_of(const FpdConfig& c)
-{
-    if (c.gravity_compensate >= 0) { return c.gravity_compensate; }
-    return wall_z_of(c) ? 0 : 1;
-}
-
 NS_Config make_ns_config(const FpdConfig& c)
 {
-    return make_ns_config(c.Nx, c.Ny, c.Nz, c.dt, c.kT, c.noise_on != 0, wall_z_of(c));
+    return make_ns_config(c.Nx, c.Ny, c.Nz, c.dt, c.kT, c.noise_on != 0);
 }
 
 PhiParams make_phi_params(const FpdConfig& c)

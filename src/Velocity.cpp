@@ -44,7 +44,7 @@ void update_particle_position(
 )
 {
     const double DT = cfg.dt;
-    const double Lx = (double)cfg.Nx, Ly = (double)cfg.Ny, Lz = (double)cfg.Nz;
+    const double Lx = (double)cfg.Nx, Ly = (double)cfg.Ny;
 
     #pragma acc parallel loop present(Rx, Ry, Rz, Rux, Ruy, Ruz, Vx, Vy, Vz)
     for (int n = 0; n < N; n++)
@@ -62,18 +62,13 @@ void update_particle_position(
         Ry[n] += dy;
         Rz[n] += dz;
 
-        // 周期边界（修 C5：fmod 对负数返回负值，边界会破）
+        // x/y 周期边界（修 C5：fmod 对负数返回负值，边界会破）
         if      (Rx[n] <  0.0) { Rx[n] += Lx; }
         else if (Rx[n] >= Lx ) { Rx[n] -= Lx; }
         if      (Ry[n] <  0.0) { Ry[n] += Ly; }
         else if (Ry[n] >= Ly ) { Ry[n] -= Ly; }
-        // z 向：壁面模式下【不折叠】。粒子中心的合法区间是 [-1/2, Nz-1/2]；
-        // 越界意味着粒子穿墙，是物理错误 —— 故意【不 clamp】，留一个越界值让
-        // 主循环的检查发现并中止。clamp 会把穿墙变成一个看起来正常的轨迹。
-        if (!cfg.wall_z)
-        {
-            if      (Rz[n] <  0.0) { Rz[n] += Lz; }
-            else if (Rz[n] >= Lz ) { Rz[n] -= Lz; }
-        }
+        // z 向【从不折叠】：粒子中心的合法区间是 [-1/2, Nz-1/2]，越界意味着粒子
+        // 穿墙，是物理错误 —— 故意【不 clamp】，留一个越界值让主循环的检查发现
+        // 并中止。clamp 会把穿墙变成一个看起来正常的轨迹。
     }
 }

@@ -91,7 +91,7 @@ static void run_steps(FpdState& st, PhiParams pp, int N, double bgx,
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz,
                            st.pi_nx, st.pi_ny, st.pi_nz,
-                           st.fft, st.plan, st.plan_xy, st.tri_w, st.diag,
+                           st.fft, st.plan_xy, st.tri_w, st.diag,
                            st.gen, st.randD, st.randN,
                            st.tmp_fx, st.tmp_fy, st.tmp_fz, s);
     }
@@ -105,7 +105,7 @@ static void w1_w2_divergence(int Nx, int Ny, int Nz)
 {
     const int size = Nx * Ny * Nz;
     const double dt = 0.002, kT = 0.0;
-    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, /*noise_on=*/false, /*wall_z=*/1);
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, /*noise_on=*/false);
 
     FpdState st;
     st.init(cfg, 0, ST_FULL, 4242ULL);
@@ -174,7 +174,7 @@ static void w3_poiseuille(int Nz, double g, bool verbose, int& fails_out,
     const int Nx = 8, Ny = 8;
     const double dt = 0.01;             // eta=1 时稳定上界 dt < 1/6，留足余量
     const double eta = 1.0;
-    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, 0.0, /*noise_on=*/false, /*wall_z=*/1);
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, 0.0, /*noise_on=*/false);
 
     FpdState st;
     st.init(cfg, 0, ST_FULL, 777ULL);
@@ -241,7 +241,7 @@ static void w6_momentum_budget(int Nx, int Ny, int Nz)
 {
     const int size = Nx * Ny * Nz;
     const double dt = 0.002;
-    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, 0.0, /*noise_on=*/false, /*wall_z=*/1);
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, 0.0, /*noise_on=*/false);
 
     FpdState st;
     st.init(cfg, 0, ST_FULL, 999ULL);
@@ -280,7 +280,7 @@ static void w6_momentum_budget(int Nx, int Ny, int Nz)
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz,
                            st.pi_nx, st.pi_ny, st.pi_nz,
-                           st.fft, st.plan, st.plan_xy, st.tri_w, st.diag,
+                           st.fft, st.plan_xy, st.tri_w, st.diag,
                            st.gen, st.randD, st.randN,
                            st.tmp_fx, st.tmp_fy, st.tmp_fz, step);
 
@@ -374,7 +374,7 @@ static void w4_truncation()
     const int size = Nx * Ny * Nz;
     const double TOL = 1e-12;
 
-    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.002, 0.25, true, /*wall_z=*/1);
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.002, 0.25, true);
     PhiParams pp  = make_phi_params(3.2, 1.0, 50.0);
 
     // 四种构型：远离壁 / 贴【下】壁 / 贴【上】壁 / N=2 重叠且靠近下壁。
@@ -483,11 +483,10 @@ static void w4_truncation()
 // 对 √2 的判别力：壁面棱边有 2 层 × Nx·Ny × 2 个分量（yz/zx）少/多一倍方差，
 // 相对亏损 ≈ 2/(2Nz−1)。Nz=4 时是 29%，远大于任何数值误差。
 // ============================================================================
-static double fdt_matrix_identity(int Nx, int Ny, int Nz, bool wall,
+static double fdt_matrix_identity(int Nx, int Ny, int Nz,
                                   double kT, double dt, bool gamma1, const char* tag)
 {
-    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, /*noise_on=*/true,
-                                   wall ? 1 : 0);
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, /*noise_on=*/true);
     cfg.adv_on       = 0;   // 严格线性
     cfg.noise_skip   = 1;   // 手动注入噪声
     cfg.noise_gamma1 = gamma1 ? 1 : 0;
@@ -506,13 +505,13 @@ static double fdt_matrix_identity(int Nx, int Ny, int Nz, bool wall,
                        0.0, 0.0, 0.0, st.fx, st.fy, st.fz);
 
     // --- 自由速度自由度表：(分量 0/1/2, 线性下标) ---
-    // 壁面模式下 vz 的上壁那一层不是自由度（恒 0，永不更新）。
+    // vz 的上壁那一层不是自由度（恒 0，永不更新）。
     std::vector<int> vcomp, vidx;
     for (int t = 0; t < size; t++) { vcomp.push_back(0); vidx.push_back(t); }
     for (int t = 0; t < size; t++) { vcomp.push_back(1); vidx.push_back(t); }
     for (int t = 0; t < size; t++)
     {
-        if (wall && t / (Nx * Ny) == Nz - 1) { continue; }
+        if (t / (Nx * Ny) == Nz - 1) { continue; }
         vcomp.push_back(2); vidx.push_back(t);
     }
     const int nv = (int)vcomp.size();
@@ -534,7 +533,7 @@ static double fdt_matrix_identity(int Nx, int Ny, int Nz, bool wall,
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz,
                            st.pi_nx, st.pi_ny, st.pi_nz,
-                           st.fft, st.plan, st.plan_xy, st.tri_w, st.diag,
+                           st.fft, st.plan_xy, st.tri_w, st.diag,
                            st.gen, st.randD, st.randN,
                            st.tmp_fx, st.tmp_fy, st.tmp_fz, 0L);
         acc_update_self(st.vx, (size_t)size * sizeof(double));
@@ -597,8 +596,8 @@ static double fdt_matrix_identity(int Nx, int Ny, int Nz, bool wall,
 
     // 判据 ①：tr S == dim
     //   dim = n_v − rank(D)，rank(D) = Nx·Ny·Nz − 1（常压力在散度的左零空间）
-    //   ⇒ dim = nv − size + 1。这个式子在周期/壁面两种模式下【自动】都对：
-    //     周期 nv=3·size ⇒ dim=2·size+1；壁面 nv=Nx·Ny·(3Nz−1) ⇒ Nx·Ny·(2Nz−1)+1。
+    //   ⇒ dim = nv − size + 1。壁面 nv=Nx·Ny·(3Nz−1) ⇒ Nx·Ny·(2Nz−1)+1。
+    //   ⚠️ 这个量与 W5b / doc/PressurePoisson.md §14.4 的 dim 必须一致。
     double trS = 0.0;
     for (int i = 0; i < nv; i++) { trS += S[(size_t)i * nv + i]; }
     const int dim = nv - size + 1;
@@ -658,7 +657,7 @@ static void w5p_fdt_extrapolated(int Nx, int Ny, int Nz)
     {
         char tag[64];
         std::snprintf(tag, sizeof(tag), "壁面 %dx%dx%d", Nx, Ny, Nz);
-        r[q] = fdt_matrix_identity(Nx, Ny, Nz, /*wall=*/true, kT, dts[q], /*gamma1=*/false, tag);
+        r[q] = fdt_matrix_identity(Nx, Ny, Nz, kT, dts[q], /*gamma1=*/false, tag);
     }
     // 残差实测按 dt^p 衰减，dt→0 时归零。
     // ⚠️ 不能用幂律拟合：壁面那一支在 dt 小到某个点时会【穿过零】变成负的
@@ -693,8 +692,7 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
                              bool gamma1, long n_steps, unsigned long long seed,
                              bool verbose = true)
 {
-    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, /*noise_on=*/true,
-                                   /*wall_z=*/1);
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, /*noise_on=*/true);
     cfg.noise_gamma1 = gamma1 ? 1 : 0;
 
     FpdState st;
@@ -728,7 +726,7 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz,
                            st.pi_nx, st.pi_ny, st.pi_nz,
-                           st.fft, st.plan, st.plan_xy, st.tri_w, st.diag,
+                           st.fft, st.plan_xy, st.tri_w, st.diag,
                            st.gen, st.randD, st.randN,
                            st.tmp_fx, st.tmp_fy, st.tmp_fz, step);
 

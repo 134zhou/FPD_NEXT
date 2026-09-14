@@ -73,8 +73,7 @@ static int cmd_dump(int argc, char** argv)
     printf("  has_pressure %s\n", h.has_pressure() ? "是" : "否");
 
     // 派生量：由 Common.h 的工厂算出，不从文件读
-    NS_Config ns = make_ns_config(h.Nx, h.Ny, h.Nz, h.dt, h.kT, h.noise_on != 0,
-                                  h.has_wall_z() ? 1 : 0);
+    NS_Config ns = make_ns_config(h.Nx, h.Ny, h.Nz, h.dt, h.kT, h.noise_on != 0);
     PhiParams pp = make_phi_params(h.radius, h.xi, h.ratio_eta);
     printf("  --- 派生量（由 make_ns_config/make_phi_params 重算）---\n");
     printf("  W            %.17g\n", ns.W);

@@ -58,14 +58,14 @@ static int run_production(const FpdConfig& c)
                       << "，配置文件要求 " << cfg.Nx << "x" << cfg.Ny << "x" << cfg.Nz << "\n";
             return 2;
         }
-        // z 向边界也必须一致：拿周期存档去跑壁面（或反之）会得到一个物理上错误的
+        // 本构建只接受 z 向无滑移壁面构型。旧的 z 周期存档会得到一个物理上错误的
         // 初态（典型是 vz[...,Nz-1] != 0，直接破坏泊松的相容性条件 Σ_k b̂_k = 0，
-        // 表现为压力的线性漂移）。不静默采信任何一方。
-        if (fh.has_wall_z() != (cfg.wall_z != 0))
+        // 表现为压力的线性漂移），必须拒绝而不是静默采信 —— 见下面的硬检查。
+        if (!fh.has_wall_z())
         {
-            std::cerr << "错误: " << c.init_file << " 是 "
-                      << (fh.has_wall_z() ? "z 向无滑移壁面" : "z 向周期")
-                      << " 构型，而配置 boundary_z=" << c.boundary_z << "。两者必须一致\n";
+            std::cerr << "错误: " << c.init_file
+                      << " 不是 z 向无滑移壁面构型（FPD_FLAG_WALL_Z 未置位）。\n"
+                      << "      本版本删除了 z 周期路径，请用 tools/make_init.py 重新生成\n";
             return 2;
         }
         h = fh;
@@ -120,19 +120,11 @@ static int run_production(const FpdConfig& c)
     const PotentialParams pot = make_potential_params(c);
     const ExternalField  ext = make_external_field(c);
 
-    // 背景力密度补偿：外场均匀时 Σ_n F = N·g ≠ 0，流体 k=0 被线性加速、整盒漂移。
-    // bg = −ΣF/size 抵消它。z 向壁面上线后（有真实动量汇）auto 解析为 0。
-    // ⚠️ auto 的结果【显式打印】—— 配置值随另一个配置项变化是新引入的语义，
-    //    静默是本项目反复点名的事故类别。
-    const int comp = gravity_compensate_of(c);
-    if (c.gravity_compensate < 0)
-    {
-        std::cout << "gravity_compensate = auto -> " << comp
-                  << "   (boundary_z=" << c.boundary_z << ")" << std::endl;
-    }
-    const double bgx = comp ? -(ext.gx * (double)N) / (double)size : 0.0;
-    const double bgy = comp ? -(ext.gy * (double)N) / (double)size : 0.0;
-    const double bgz = comp ? -(ext.gz * (double)N) / (double)size : 0.0;
+    // 背景力密度补偿恒为 0：无滑移壁面本身就是真实的动量汇，均匀外场的反冲由
+    // 壁面吸收，不需要 bg = −ΣF/size 去抵消「整盒漂移」。
+    // ⚠️ 管道保留（update_force_field 的 bg 形参不动，见 Force.cpp 的力路径约束），
+    //    只是传 0。删形参会动到力路径，代价远大于收益。
+    const double bgx = 0.0, bgy = 0.0, bgz = 0.0;
 
     if (c.potential != "none")
     {
@@ -141,8 +133,8 @@ static int run_production(const FpdConfig& c)
     }
     if (ext.gx != 0.0 || ext.gy != 0.0 || ext.gz != 0.0)
     {
-        std::cout << "外场: (" << ext.gx << ", " << ext.gy << ", " << ext.gz << ")"
-                  << "   补偿=" << (c.gravity_compensate ? "on" : "off") << std::endl;
+        std::cout << "外场: (" << ext.gx << ", " << ext.gy << ", " << ext.gz
+                  << ")   背景补偿 = 0（壁面即动量汇）" << std::endl;
     }
 
     std::cout << "开始模拟：" << cfg.Nx << "x" << cfg.Ny << "x" << cfg.Nz
@@ -169,8 +161,7 @@ static int run_production(const FpdConfig& c)
             oh.rng_draws = 2ULL * (unsigned long long)step
                          * 3ULL * (unsigned long long)h.size();
             // 局部 struct 不能引用外层函数的局部变量，所以墙标志从 st.cfg 取
-            oh.flags = (c.save_pressure ? FPD_FLAG_PRESSURE : 0u)
-                     | (st.cfg.wall_z ? FPD_FLAG_WALL_Z : 0u);
+            oh.flags = (c.save_pressure ? FPD_FLAG_PRESSURE : 0u) | FPD_FLAG_WALL_Z;
 
             CkptArrays oa = st.ckpt_arrays();
             if (!c.save_pressure) { oa.p = 0; }
@@ -184,14 +175,13 @@ static int run_production(const FpdConfig& c)
     };
     const CkptWriter writer{c, h, st};
 
-    // 壁面模式下的粒子越界检查。只在已经 download 过 ST_PARTICLE 的地方调用 ——
+    // 粒子越界检查。只在已经 download 过 ST_PARTICLE 的地方调用 ——
     // 不做每步的 device→host 同步（那会把 GPU 流水线打断）。
     // ⚠️ 代价是检测延迟到下一个检查点/日志间隔。本轮不做壁面排斥势，粒子靠初始
-    //    构型远离壁面（make_init.py --wall-margin）；等将来加了壁面势，粒子会在
+    //    构型远离壁面（make_init.py 的壁面边距）；等将来加了壁面势，粒子会在
     //    碰到壁之前被弹回，这个检查退化成纯保险。
     auto check_wall_bounds = [&](long step) -> bool
     {
-        if (!cfg.wall_z) { return false; }
         const double zlo = -0.5, zhi = (double)cfg.Nz - 0.5;
         for (int n = 0; n < N; n++)
         {
@@ -259,7 +249,7 @@ static int run_production(const FpdConfig& c)
         step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.fx, st.fy, st.fz,
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz, st.pi_nx, st.pi_ny, st.pi_nz,
-                           st.fft, st.plan, st.plan_xy, st.tri_w, st.diag,
+                           st.fft, st.plan_xy, st.tri_w, st.diag,
                            st.gen, st.randD, st.randN,
                            st.tmp_fx, st.tmp_fy, st.tmp_fz, step);
         update_particle_velocity(cfg, pp, N, st.Rx, st.Ry, st.Rz,

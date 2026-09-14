@@ -3,12 +3,15 @@
 #include "Check.h"
 
 // ============================================================================
-// 压力泊松求解器：周期（3D FFT）与壁面（xy 2D FFT + z 三对角）两条路径。
+// 压力泊松求解器：xy 2D 批量 FFT + z 向三对角（Thomas）【唯一路径】。
 //
 // 数学推导见 doc/PressurePoisson.md，本文件是它的代码对照。核心不变量：
 // 泊松算子必须是 div∘grad 的精确复合 —— 修正步用的梯度、散度检验用的散度、
-// 这里解算的算子，三者是同一套离散。周期路径用精确离散本征值（非连续谱 -k²），
-// 壁面路径的三对角是「壁面法向面不修正」直接导出的（Neumann 是结论不是假设）。
+// 这里解算的算子，三者是同一套离散。三对角（Neumann）是「壁面法向面不修正」
+// 直接导出的结论，不是假设。
+//
+// ⚠️ 曾有第二条路径：全周期 3D FFT + 精确离散本征值
+//    0.5/(cos kx + cos ky + cos kz - 3)。它随 z 周期边界一起在 Phase 8-A 删除。
 // ============================================================================
 
 // ---------------------------------------------------------------------------
@@ -88,59 +91,7 @@ static void thomas_sweep(int Nx, int Ny, int Nz, double* fft_data, const double*
 }
 
 // ---------------------------------------------------------------------------
-// 周期路径：3D FFT → 除以精确离散本征值 → 逆 FFT → p = Re/size。
-// 算术表达式与 Stokes.cpp 原样一致（见 doc/PressurePoisson.md §4）。
-// ---------------------------------------------------------------------------
-static void solve_periodic(NS_Config cfg, double* fft_data, cufftHandle plan3d, double* p)
-{
-    const int Nx = cfg.Nx, Ny = cfg.Ny, Nz = cfg.Nz;
-    const int size = Nx * Ny * Nz;
-
-    #pragma acc host_data use_device(fft_data)
-    {
-        CUFFT_CHECK(cufftExecZ2Z(plan3d, (cufftDoubleComplex*)fft_data,
-                                 (cufftDoubleComplex*)fft_data, CUFFT_FORWARD));
-    }
-
-    // 除以 7 点差分格式的【精确离散】拉普拉斯本征值 2(cos kx + cos ky + cos kz - 3)
-    #pragma acc parallel loop collapse(3) present(fft_data)
-    for (int i = 0; i < Nx; i++)
-    {
-        for (int j = 0; j < Ny; j++)
-        {
-            for (int k = 0; k < Nz; k++)
-            {
-                int ijk = IDX(i, j, k);
-                if (i == 0 && j == 0 && k == 0) { fft_data[ijk*2] = 0; fft_data[ijk*2+1] = 0; continue; }
-                double nrm = 0.5 / (cos(2.*M_PI*i/Nx) + cos(2.*M_PI*j/Ny) + cos(2.*M_PI*k/Nz) - 3.0);
-                fft_data[ijk * 2]     *= nrm;
-                fft_data[ijk * 2 + 1] *= nrm;
-            }
-        }
-    }
-
-    #pragma acc host_data use_device(fft_data)
-    {
-        CUFFT_CHECK(cufftExecZ2Z(plan3d, (cufftDoubleComplex*)fft_data,
-                                 (cufftDoubleComplex*)fft_data, CUFFT_INVERSE));
-    }
-
-    #pragma acc parallel loop collapse(3) present(fft_data, p)
-    for (int i = 0; i < Nx; i++)
-    {
-        for (int j = 0; j < Ny; j++)
-        {
-            for (int k = 0; k < Nz; k++)
-            {
-                int ijk = IDX(i, j, k);
-                p[ijk] = fft_data[ijk * 2] / (double)size;
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 壁面路径：2D 批量 FFT → 奇异列相容投影 → Thomas → 逆 2D FFT → p = Re/(Nx*Ny)。
+// 2D 批量 FFT → 奇异列相容投影 → Thomas → 逆 2D FFT → p = Re/(Nx*Ny)。
 // 归一化因子是 Nx*Ny 而非 size（2D 变换点数），见 doc/PressurePoisson.md §9。
 // ---------------------------------------------------------------------------
 static void solve_wall(NS_Config cfg, double* fft_data, const double* tri_w,
@@ -206,15 +157,7 @@ void build_tridiag_coeffs(NS_Config cfg, double* tri_w)
 }
 
 void solve_pressure(NS_Config cfg, double* fft_data, const double* tri_w,
-                    cufftHandle plan3d, cufftHandle plan_xy,
-                    double* p, double* diag)
+                    cufftHandle plan_xy, double* p, double* diag)
 {
-    if (cfg.wall_z)
-    {
-        solve_wall(cfg, fft_data, tri_w, plan_xy, p, diag);
-    }
-    else
-    {
-        solve_periodic(cfg, fft_data, plan3d, p);
-    }
+    solve_wall(cfg, fft_data, tri_w, plan_xy, p, diag);
 }

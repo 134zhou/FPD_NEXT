@@ -12,7 +12,6 @@ void step_navier_stokes
     double* pi_dx, double* pi_dy, double* pi_dz,
     double* pi_nx, double* pi_ny, double* pi_nz,
     double* fft_data,
-    cufftHandle plan,
     cufftHandle plan_xy,
     const double* tri_w,
     double* diag,
@@ -25,8 +24,7 @@ void step_navier_stokes
     int Nx = cfg.Nx, Ny = cfg.Ny, Nz = cfg.Nz;
     int size = Nx * Ny * Nz;
     double DT = cfg.dt;
-    const int wz   = cfg.wall_z;      // 0 = 周期，1 = z 向无滑移壁面
-    const int esize = wz_edge_size(cfg);   // 棱边数组元素数（壁面模式是 Nz+1 层）
+    const int esize = wz_edge_size(cfg);   // 棱边数组元素数（Nz+1 层，见 Wall.h）
     // 对流开关：生产恒为 1。乘 1.0 是精确运算，所以默认路径逐位不变。
     const double ADV = (double)cfg.adv_on;
 
@@ -35,8 +33,7 @@ void step_navier_stokes
     // 方向（棱边，esize 个）。每次生成前显式定位到本步专属的 slot，不依赖「上次生成后
     // 序列前进了多少」—— 实测那个前进量并非 n，累计记账会失配（详见 Stokes.h）。
     //
-    // slot 按两个数组各自的实际长度算：周期模式下 esize == size ⇒ 与
-    // (2*step+c)*3*size 逐位相同（Phase 7-B 之前的行为原样保住）。
+    // slot 按两个数组各自的实际长度算。
     const unsigned long long slotD = wz_rand_slot_d(cfg);
     const unsigned long long slotN = wz_rand_slot_n(cfg);
     const unsigned long long base  = (unsigned long long)step * (slotD + slotN);
@@ -56,27 +53,27 @@ void step_navier_stokes
 
     // --- 2. 计算总动量通量 Π = Advection - Viscosity - Noise ---
     // 逻辑 k 统一遍历：体心量在 k ∈ [0,Nz-1]；棱边量 Π_yz/Π_zx 在 k ∈ [-1,Nz-1]
-    // （壁面模式下多出 k=-1 这一层 = 下壁棱边，上壁棱边在 k=Nz-1）。
-    // 周期模式下 wz=0 ⇒ kk≡k、范围不变，与 Phase 7-B 之前逐位一致。
+    // （多出 k=-1 这一层 = 下壁棱边，上壁棱边在 k=Nz-1）。
     #pragma acc parallel loop collapse(3) present(vx, vy, vz, eta, etaXY, etaYZ, etaZX, randD, randN, pi_dx, pi_dy, pi_dz, pi_nx, pi_ny, pi_nz)
     for (int i = 0; i < Nx; i++)
     {
         for (int j = 0; j < Ny; j++)
         {
-            for (int kk = 0; kk < Nz + wz; kk++)
+            for (int kk = 0; kk < Nz + 1; kk++)
             {
-                const int k = kk - wz;
+                const int k = kk - 1;
                 int ip = (i + 1) % Nx; int im = (i - 1 + Nx) % Nx;
                 int jp = (j + 1) % Ny; int jm = (j - 1 + Ny) % Ny;
 
                 // ---------------- 体心量：仅 k ∈ [0, Nz-1] ----------------
-                // 注意 z 向邻居仍用 (k-1+Nz)%Nz：壁面模式下 k=0 时 vaz 与 Π_zz 的
-                // 粘性项会读到 vz[Nz-1]，而那个元素被钉死为 0 —— 正是下壁
-                // vz[-1]=0 所需的 ghost。所以这两处【一行都不用改】。
+                // ⚠️ z 向邻居用 (k-1+Nz)%Nz 是【承重的壁面代码，不是周期残留】：
+                //    k=0 时读到 vz[Nz-1]，而那个元素被下面 3a 段钉死为 0 —— 正是
+                //    下壁 vz[-1]=0 所需的 ghost。所以这两处【一行都不用改】，
+                //    也不许「修」成 k-1（会越界）。
                 if (k >= 0)
                 {
+                    const int kp = (k + 1) % Nz; const int km = (k - 1 + Nz) % Nz;   // kp 未被引用，见 3a
                     const int ijk = IDX(i, j, k);
-                    const int kp = (k + 1) % Nz; const int km = (k - 1 + Nz) % Nz;
 
                     // --- 正应力分量 (Diagonal terms: Πxx, Πyy, Πzz) ---
                     // 物理位置：Cell Center (i,j,k)
@@ -105,7 +102,7 @@ void step_navier_stokes
                 }
 
                 // ---------------- 棱边量：k ∈ [-1, Nz-1] ----------------
-                // 这两个量在 z 方向【没有】周期回绕（壁面模式下不环绕到另一片壁），
+                // 这两个量在 z 方向【没有】回绕（不环绕到另一片壁），
                 // 所以要用 wz_edge_idx 的逻辑索引 + wz_vx/wz_vy/wz_vz 的 ghost 取值。
                 // 代入 ghost 后表达式不变就自动给出正确结果：
                 //   k=-1（下壁）对流两个因子都是 0；粘性 (vx[0]-vx[-1]) = 2vx[0]。
@@ -149,8 +146,8 @@ void step_navier_stokes
                 int jp = (j + 1) % Ny; int jm = (j - 1 + Ny) % Ny;
                 int kp = (k + 1) % Nz; int km = (k - 1 + Nz) % Nz;
 
-                // 棱边量的 z 向邻居走逻辑索引：壁面模式下 k=0 的下面那层是【下壁】
-                // （逻辑 k=-1），不是周期回绕过来的上壁。搞错会静默用错壁面剪切。
+                // 棱边量的 z 向邻居走逻辑索引：k=0 的下面那层是【下壁】（逻辑 k=-1），
+                // 不是回绕过来的上壁。搞错会静默用错壁面剪切。
                 const int eb   = wz_edge_idx(cfg, i,  j,  k);
                 const int ebim = wz_edge_idx(cfg, im, j,  k);
                 const int ebjm = wz_edge_idx(cfg, i,  jm, k);
@@ -175,8 +172,11 @@ void step_navier_stokes
                 tmp_fy[ijk] = vy[ijk] + DT * (-d_piy + fy[ijk]);   // v*y
                 tmp_fz[ijk] = vz[ijk] + DT * (-d_piz + fz[ijk]);   // v*z
 
-                // 壁面法向面【永不修正】：v*z 在两壁钉死为 0。这正是
-                // doc/PressurePoisson.md §8a 相容性条件 Σ_k b̂_k = 0 的前提。
+                // 壁面法向面【永不修正】：v*z 在两壁钉死为 0。
+                // ⚠️ 这个置 0 是【承重的】：上面体心段的 km=(k-1+Nz)%Nz 与下面
+                //    散度段的 km 都靠它把「绕回来的上一层」变成正确的 ghost
+                //    v*z[-1]=0。这正是 doc/PressurePoisson.md §8a 相容性条件
+                //    Σ_k b̂_k = 0 的前提，动了它 W1/W2/W6 一起破。
                 if (wz_pinned_zface(cfg, k)) { tmp_fz[ijk] = 0.0; }
             }
         }
@@ -209,10 +209,9 @@ void step_navier_stokes
     }
 
     // --- 4. 求解压力泊松方程 ---
-    // 按 cfg.wall_z 分派：周期走 3D FFT + 精确离散本征值；壁面走 xy 2D 批量 FFT
-    // + z 向 Thomas。归一化因子（size / Nx·Ny）只在 solve_pressure 内部出现一次。
-    // 数学推导与公式↔代码对照见 doc/PressurePoisson.md。
-    solve_pressure(cfg, fft_data, tri_w, plan, plan_xy, p, diag);
+    // xy 2D 批量 FFT + z 向 Thomas。归一化因子（Nx·Ny）只在 solve_pressure
+    // 内部出现一次。数学推导与公式↔代码对照见 doc/PressurePoisson.md。
+    solve_pressure(cfg, fft_data, tri_w, plan_xy, p, diag);
 
     // --- 5. 修正步 (Correction / projection) ---
     // v^{n+1} = v* - dt·∇p，其中 v* 就是 tmp_f*。
@@ -232,7 +231,7 @@ void step_navier_stokes
                 vx[ijk] = tmp_fx[ijk] - DT * (p[IDX(ip, j, k)] - p[ijk]);
                 vy[ijk] = tmp_fy[ijk] - DT * (p[IDX(i, jp, k)] - p[ijk]);
                 // 壁面法向面永不修正：vz 在那两处恒 0。k=Nz-1 时 kp 会回绕到 0，
-                // 那在壁面模式下是错的，所以这一层干脆不写（vz[Nz-1] 保持初值 0）。
+                // 那是错的，所以这一层干脆不写（vz[Nz-1] 保持初值 0）。
                 if (!wz_pinned_zface(cfg, k))
                 {
                     vz[ijk] = tmp_fz[ijk] - DT * (p[IDX(i, j, kp)] - p[ijk]);
