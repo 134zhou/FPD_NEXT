@@ -35,12 +35,6 @@ struct FpdConfig
     double gravity_z = 0.0;
     int    noise_on = 1;
 
-    // z 向边界：只有 noslip 合法（x/y 仍周期）。
-    // ⚠️ 曾有的 periodic 与随它一起的 gravity_compensate 开关已在 Phase 8-A 删除：
-    //    无滑移壁面本身就是真实的动量汇，均匀外场的反冲由壁面吸收，不需要背景
-    //    力密度补偿（旧开关的 auto 恒解析为 0，等于一个只能取 0 的死开关）。
-    std::string boundary_z = "noslip";
-
     // --- 粒子间势（可选；potential=none 时以下全部不用）---
     std::string potential = "none";   // none | wca | morse | lj126
     double pot_eps    = 0.0;          // WCA/LJ 的 ε

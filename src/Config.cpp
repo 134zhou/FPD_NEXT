@@ -24,7 +24,6 @@ std::vector<FieldDesc> config_fields(FpdConfig& c)
         {"gravity_z",      F_DOUBLE, &c.gravity_z,      false, "z 向外场力（每粒子）"},
         {"gravity_x",      F_DOUBLE, &c.gravity_x,      false, "x 向外场力（每粒子）"},
         {"gravity_y",      F_DOUBLE, &c.gravity_y,      false, "y 向外场力（每粒子）"},
-        {"boundary_z",     F_STRING, &c.boundary_z,     false, "z 向边界: noslip（唯一合法值）"},
         {"noise_on",       F_INT,    &c.noise_on,       false, "0/1，关掉则 W=0"},
 
         {"potential",      F_STRING, &c.potential,      false, "粒子间势: none|wca|morse|lj126"},
@@ -315,23 +314,10 @@ bool validate_config(const FpdConfig& c, std::string& err)
     if (c.interval_ckpt <= 0) { err = "interval_ckpt 必须为正"; return false; }
     if (c.interval_log  <= 0) { err = "interval_log 必须为正"; return false; }
 
-    // --- z 向边界：只有 noslip ---
-    // periodic 给出【专门的】「它被删了」而不是「取值不合法」—— 静默或含糊都是
-    // 本项目反复点名的事故类别。
-    if (c.boundary_z == "periodic")
-    {
-        err = "boundary_z=periodic 已于 Phase 8-A 删除（三维 FFT 全周期路径随 z 周期"
-              "边界一起移除）。请改用 boundary_z = noslip（z 上下无滑移硬壁）或删掉这一行";
-        return false;
-    }
-    if (c.boundary_z != "noslip")
-    {
-        err = "boundary_z 的合法取值只有 noslip，收到 '" + c.boundary_z + "'";
-        return false;
-    }
+    // z 向边界固定为上下无滑移硬壁，因此这是无条件的网格约束。
     if (c.Nz < 2)
     {
-        err = "boundary_z=noslip 要求 Nz >= 2（两面壁之间至少要有 1 个自由 z 面）";
+        err = "z 向无滑移硬壁要求 Nz >= 2（两面壁之间至少要有 1 个自由 z 面）";
         return false;
     }
 
