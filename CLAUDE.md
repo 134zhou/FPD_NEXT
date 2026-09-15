@@ -192,11 +192,11 @@ vector-reduction-over-j，零 atomic），求和顺序在固定 N 与固定 gang
 ⚠️ **前置条件 `h > 0` 是调用方的责任**：`h < 0` 时 `h²` 仍为正，
 `pair_force_over_r(h²)·h` 会给出**符号反向**的力（把粒子往壁里推）——
 一条无诊断的错物理路径。所以函数**不兜底、不 clamp**，
-`main.cpp` 的 `check_wall_bounds` 在 `wall_pot != none` 时把合法区间收紧到
+`main.cpp` 的 `check_wall_bounds` 在 `wallpotential != none` 时把合法区间收紧到
 `z ∈ [-1/2+a, Nz-1/2-a]` 并中止。
 
 改完 `Potential.h` / `Potential.cpp` / `Wall.h` / `main.cpp` 的越界判据之后**必须**跑
-`./build/fpd_check --check-wall`，其中 **W8e 是回归锚**：`wall_pot = none` 时
+`./build/fpd_check --check-wall`，其中 **W8e 是回归锚**：`wallpotential = none` 时
 W1–W7 的全部数字必须逐字节不变。
 
 几个不能忘的数：

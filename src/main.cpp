@@ -152,9 +152,9 @@ static int run_production(const FpdConfig& c)
         std::cout << "势: " << c.potential << "   shift=" << c.pot_shift
                   << "   rcut=" << pot.rcut << std::endl;
     }
-    if (c.wall_pot != "none")
+    if (c.wallpotential != "none")
     {
-        std::cout << "壁面势: " << c.wall_pot << "   shift=" << c.wall_shift
+        std::cout << "壁面势: " << c.wallpotential << "   shift=" << c.wall_shift
                   << "   rcut=" << wall.pot.rcut << "   a=" << wall.radius
                   << "（自变量是表面间隙 h = z_壁 - a）" << std::endl;
     }

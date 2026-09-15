@@ -51,12 +51,12 @@ struct FpdConfig
     double pot_rcut   = 0.0;          // LJ/Morse 截断（WCA 派生，用户不应给）
     std::string pot_shift = "energy"; // none | energy | force
 
-    // --- 粒子-壁面排斥势（可选；wall_pot=none 时以下全部不用）---
+    // --- 粒子-壁面排斥势（可选；wallpotential=none 时以下全部不用）---
     // 壁面在 z = -1/2 与 Nz-1/2，势的自变量是【表面到壁面的间隙】
     // h = (z + 1/2) - a（见 Potential.h 的 wall_gap_*）。
     // ⚠️ 势函数族与 pot_* 共用同一套 enum，但参数【独立】——壁面强度不该被
     //    粒子间势的参数静默绑定。
-    std::string wall_pot = "none";    // none | wca | morse | lj126
+    std::string wallpotential = "none"; // none | wca | morse | lj126
     double wall_eps    = 0.0;         // WCA/LJ 的 ε
     double wall_sigma  = 0.0;         // WCA/LJ 的 σ
     double wall_De     = 0.0;         // Morse 阱深

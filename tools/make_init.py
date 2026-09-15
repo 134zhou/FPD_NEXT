@@ -154,7 +154,7 @@ def main():
                else float(math.ceil(a.radius + 3.0 * a.xi) + 1)
 
     # 有壁面势时的硬下界：C++ 的 check_wall_bounds 要求 h = (z+1/2)-a > 0
-    #（wall_pot=none 时只要求中心在盒内）。低于它构型会被直接中止。
+    #（wallpotential=none 时只要求中心在盒内）。低于它构型会被直接中止。
     h_floor = -0.5 + a.radius
     if z_margin < h_floor:
         raise SystemExit(

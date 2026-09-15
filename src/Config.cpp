@@ -36,7 +36,7 @@ std::vector<FieldDesc> config_fields(FpdConfig& c)
         {"pot_rcut",       F_DOUBLE, &c.pot_rcut,       false, "LJ/Morse 截断半径（WCA 派生，不应给）"},
         {"pot_shift",      F_STRING, &c.pot_shift,      false, "截断移位: none|energy|force"},
 
-        {"wall_pot",       F_STRING, &c.wall_pot,       false, "粒子-壁面排斥势: none|wca|morse|lj126"},
+        {"wallpotential",   F_STRING, &c.wallpotential,   false, "粒子-壁面排斥势: none|wca|morse|lj126"},
         {"wall_eps",       F_DOUBLE, &c.wall_eps,       false, "壁面势 WCA/LJ 的 ε"},
         {"wall_sigma",     F_DOUBLE, &c.wall_sigma,     false, "壁面势 WCA/LJ 的 σ（自变量是表面间隙 h）"},
         {"wall_De",        F_DOUBLE, &c.wall_De,        false, "壁面势 Morse 阱深 De"},
@@ -241,28 +241,29 @@ bool apply_override(FpdConfig& c, const char* kv, std::string& err)
 
 // 势参数查表的 helper：防「用不到的参数被静默忽略」。
 //
-// ⚠️ 粒子间势（pot_* / potential）与壁面势（wall_* / wall_pot）【共用这三个函数】，
-//    靠 prefix + selector 参数区分。曾经想过复制一份 wall_ 版，否掉了 ——
+// ⚠️ 粒子间势（pot_* / potential）与壁面势（wall_* / wallpotential）【共用这三个函数】，
+//    靠 prefix 参数区分。曾经想过复制一份 wall_ 版，否掉了 ——
 //    复制粘贴后各自漂移正是 C1/C2 的成因。
-//
-// selector 必须显式传：'potential' 不以 'pot_' 开头（天然被前缀判据排除），
-// 但 'wall_pot' 恰好以 'wall_' 开头，不排除就会被当成「用不到的势参数」报错。
-static bool is_pot_param(const std::string& key, const char* prefix, const char* selector)
+
+// 某个 key 是否属于这一组势参数。
+static bool is_pot_param(const std::string& key, const char* prefix)
 {
-    if (key == selector) { return false; }
     const size_t n = std::strlen(prefix);
     return key.size() > n && key.compare(0, n, prefix) == 0;
 }
+
+// 当前选择的势是否需要这个参数。
 static bool potential_uses(const std::string& pot, const std::string& key,
-                           const char* prefix, const char* selector)
+                           const char* prefix)
 {
-    if (key == selector) { return false; }
     auto p = [prefix](const char* suffix) { return std::string(prefix) + suffix; };
     if (pot == "wca")   { return key == p("eps") || key == p("sigma"); }
     if (pot == "morse") { return key == p("De") || key == p("alpha") || key == p("r_eq") || key == p("rcut"); }
     if (pot == "lj126") { return key == p("eps") || key == p("sigma") || key == p("rcut"); }
     return false;
 }
+
+// 用户是否真的明确提供过这个参数。
 static bool was_given(const std::vector<std::string>& keys, const std::string& k)
 {
     for (size_t i = 0; i < keys.size(); i++) { if (keys[i] == k) { return true; } }
@@ -350,19 +351,19 @@ bool validate_config(const FpdConfig& c, std::string& err)
     }
 
     // --- 势函数检查：合法性 ---
-    // 粒子间势与壁面势共用同一套 enum 与同一段逻辑，只换 prefix/selector。
+    // 粒子间势与壁面势共用同一套 enum 与同一段逻辑，只换 prefix/potential_key。
     // 「加新势族要改三处、漏一处就静默」正是这个 helper 要消灭的东西。
     struct PotFamily
     {
-        const char* prefix;      // "pot_" / "wall_"
-        const char* selector;    // "potential" / "wall_pot"
+        const char* prefix;        // "pot_" / "wall_"
+        const char* potential_key; // "potential" / "wallpotential"
         const char* shift_key;   // "pot_shift" / "wall_shift"
         const std::string* pot;  // 当前取值
         const std::string* shift;
     };
     const PotFamily fams[2] = {
         {"pot_",  "potential", "pot_shift",  &c.potential,  &c.pot_shift},
-        {"wall_", "wall_pot",  "wall_shift", &c.wall_pot,   &c.wall_shift},
+        {"wall_", "wallpotential", "wall_shift", &c.wallpotential, &c.wall_shift},
     };
     for (int f = 0; f < 2; f++)
     {
@@ -370,7 +371,7 @@ bool validate_config(const FpdConfig& c, std::string& err)
         const std::string& pn = *F.pot;
         if (pn != "none" && pn != "wca" && pn != "morse" && pn != "lj126")
         {
-            err = std::string(F.selector) + " 的合法取值是 none | wca | morse | lj126，收到 '" + pn + "'";
+            err = std::string(F.potential_key) + " 的合法取值是 none | wca | morse | lj126，收到 '" + pn + "'";
             return false;
         }
         if (*F.shift != "none" && *F.shift != "energy" && *F.shift != "force")
@@ -383,11 +384,11 @@ bool validate_config(const FpdConfig& c, std::string& err)
         for (size_t i = 0; i < c.keys_given.size(); i++)
         {
             const std::string& k = c.keys_given[i];
-            if (is_pot_param(k, F.prefix, F.selector) && k != F.shift_key &&
-                !potential_uses(pn, k, F.prefix, F.selector))
+            if (is_pot_param(k, F.prefix) && k != F.shift_key &&
+                !potential_uses(pn, k, F.prefix))
             {
-                err = std::string(F.selector) + " = " + pn + " 用不到 " + k +
-                      "，请删掉它或改 " + F.selector;
+                err = std::string(F.potential_key) + " = " + pn + " 用不到 " + k +
+                      "，请删掉它或改 " + F.potential_key;
                 return false;
             }
         }
@@ -408,7 +409,7 @@ bool validate_config(const FpdConfig& c, std::string& err)
             }
             if (!missing.empty())
             {
-                err = std::string(F.selector) + " = " + pn + " 需要 " + missing +
+                err = std::string(F.potential_key) + " = " + pn + " 需要 " + missing +
                       "（势参数不给默认值兜底）";
                 return false;
             }
@@ -461,7 +462,7 @@ bool validate_config(const FpdConfig& c, std::string& err)
 
     // --- 壁面排斥势 ---
     // 壁面是【非周期】的，所以上面那条最小镜像硬约束不适用（没有镜像可双重计数）。
-    if (c.wall_pot != "none")
+    if (c.wallpotential != "none")
     {
         WallParams wp = make_wall_params(c);
 
@@ -542,17 +543,17 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
         // 粒子间势与壁面势各跑一遍，同一段逻辑（见 is_pot_param 的注释）。
         const std::string k = tab[i].key;
         {
-            struct { const char* prefix; const char* selector;
-                     const char* shift_key; const std::string* pot; } fams[2] = {
-                {"pot_",  "potential", "pot_shift",  &c.potential },
-                {"wall_", "wall_pot",  "wall_shift", &c.wall_pot  },
+            struct { const char* prefix; const char* shift_key;
+                     const std::string* pot; } fams[2] = {
+                {"pot_",  "pot_shift",  &c.potential },
+                {"wall_", "wall_shift", &c.wallpotential },
             };
             bool skip = false;
             for (int f = 0; f < 2 && !skip; f++)
             {
-                if (!is_pot_param(k, fams[f].prefix, fams[f].selector)) { continue; }
+                if (!is_pot_param(k, fams[f].prefix)) { continue; }
                 if (k == fams[f].shift_key) { skip = (*fams[f].pot == "none"); }
-                else { skip = !potential_uses(*fams[f].pot, k, fams[f].prefix, fams[f].selector); }
+                else { skip = !potential_uses(*fams[f].pot, k, fams[f].prefix); }
             }
             if (skip) { continue; }
         }
@@ -588,12 +589,12 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
             << "   rcut = " << potp.rcut << "\n";
         ofs << "#   U(rcut) = " << potp.u_at_rc << "   U'(rcut) = " << potp.dudr_at_rc << "\n";
     }
-    if (c.wall_pot != "none")
+    if (c.wallpotential != "none")
     {
         WallParams wp = make_wall_params(c);
         double h_rest = 0.0;
         const bool have_rest = wall_rest_gap(wp, c.gravity_z, h_rest);
-        ofs << "# wall_pot        = " << c.wall_pot << "   shift = " << c.wall_shift
+        ofs << "# wallpotential   = " << c.wallpotential << "   shift = " << c.wall_shift
             << "   rcut = " << wp.pot.rcut << "   a = " << wp.radius << "\n";
         ofs << "#   U(rcut) = " << wp.pot.u_at_rc << "   U'(rcut) = " << wp.pot.dudr_at_rc << "\n";
         // 平衡间隙是运维时唯一能一眼看出「壁面势配错了」的数（配软了压在壁上、
@@ -661,9 +662,9 @@ PotentialParams make_potential_params(const FpdConfig& c)
 WallParams make_wall_params(const FpdConfig& c)
 {
     int type;
-    if      (c.wall_pot == "wca")   { type = POT_WCA;   }
-    else if (c.wall_pot == "morse") { type = POT_MORSE; }
-    else if (c.wall_pot == "lj126") { type = POT_LJ126; }
+    if      (c.wallpotential == "wca")   { type = POT_WCA;   }
+    else if (c.wallpotential == "morse") { type = POT_MORSE; }
+    else if (c.wallpotential == "lj126") { type = POT_LJ126; }
     else                            { type = POT_NONE;  }
 
     int shift;

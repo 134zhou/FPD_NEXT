@@ -239,7 +239,7 @@ static int cmd_verify_forces(const char* ckpt_path, const char* cfg_path)
 
     printf("=== verify-forces %s ===\n", ckpt_path);
     printf("  势 = %s   壁面势 = %s   外场 = (%g, %g, %g)   N = %d\n",
-           fc.potential.c_str(), fc.wall_pot.c_str(), ext.gx, ext.gy, ext.gz, h.N);
+           fc.potential.c_str(), fc.wallpotential.c_str(), ext.gx, ext.gy, ext.gz, h.N);
     printf("  重算 F vs 文件 F: max |ΔF| = %.3e   阈值 %.3e   %s\n",
            maxabs, tol, ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;

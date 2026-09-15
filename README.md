@@ -405,7 +405,7 @@ potential = wca              # 粒子间相遇
 pot_sigma = 5.7018           # = 2a/2^(1/6) ⇒ rcut = 2a，接触处力为 0
 pot_eps   = 10.0
 
-wall_pot   = wca             # 粒子-壁面排斥
+wallpotential = wca          # 粒子-壁面排斥
 wall_sigma = 2.0             # rcut = 2.24492
 wall_eps   = 1.0             # 与 gravity_z=-10 配出 h_rest ≈ 2.019
 ```
@@ -428,7 +428,7 @@ python3 tools/make_init.py --grid 128 64 32 --phi 0.05 --seed 20260914 -o out/se
 **实测（128×64×32，N=95，200k 步 / 400 时间单位，29 分钟）**：
 粒子从 z∈[7.5,23.5] 的均匀薄层沉降，前沿 `z_min` 从 7.68 降到 4.95 后**停在
 4.62~4.75**，与独立解出的 `z_rest = 4.7189` 吻合；全程最小壁面间隙 1.887 > 0。
-对照组（`wall_pot = none`）粒子沉到 `Rz = -0.5027` 后 **rc=3 中止** ——
+对照组（`wallpotential = none`）粒子沉到 `Rz = -0.5027` 后 **rc=3 中止** ——
 壁面势是必需件。
 
 ⚠️ **该运行没有给出沉降速度的数值结论，这是刻意的**：`--sed-stats` 的分块平均

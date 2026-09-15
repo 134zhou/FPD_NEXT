@@ -781,7 +781,7 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
 //        间隙表达式（不调用 wall_gap_*，那正是被检验的对象），且对 z 求导而不是
 //        对 h —— 链式法则会自动产生符号结构，手写的符号错了这里立刻显形。
 //   W8b  上下壁镜像：F_z(Nz-1-z) == -F_z(z)，且壁面势在 x/y 上恒为 0
-//   W8c  体相逐位零力；且 wall_pot=none 时【所有】z 上逐位为 0（回归锚）
+//   W8c  体相逐位零力；且 wallpotential=none 时【所有】z 上逐位为 0（回归锚）
 //   W8d  静态力平衡：独立二分反解 z_rest，断言重力+壁面力为零，且两侧符号
 //        相反（吸引子）、且偏离时残差非零（判别力断言）
 //   W8e  GPU 与 CPU 两份装配在壁面开启时一致
@@ -871,7 +871,7 @@ static void w8a_force_vs_energy()
             const double z = 0.0 + 32.0 * (double)k / 400.0;
             if (wall_force_z(w, cfg, z) != 0.0) { allzero = false; }
         }
-        check(allzero, "W8a wall_pot=none 时 F_z 逐位为 0（所有 z）");
+        check(allzero, "W8a wallpotential=none 时 F_z 逐位为 0（所有 z）");
     }
 }
 

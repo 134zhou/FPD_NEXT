@@ -345,7 +345,7 @@ spike 的 T3 额外实测：不相容右端 `Σb = 32 ≠ 0` 时解漂移 `|x[Nz
 | 壁面力并入粒子力装配（GPU/CPU 各写一份） | `Potential.cpp` 的 `compute_particle_forces*` |
 | `F_z = −dU_wall/dz` 的四阶差分对照（判据） | `CheckWall.cpp` 的 `w8a_force_vs_energy` |
 | 上下壁镜像反对称（判据） | `CheckWall.cpp` 的 `w8b_mirror_symmetry` |
-| 体相零力 / `wall_pot=none` 恒零（判据） | `CheckWall.cpp` 的 `w8c_bulk_zero` |
+| 体相零力 / `wallpotential=none` 恒零（判据） | `CheckWall.cpp` 的 `w8c_bulk_zero` |
 | 平衡高度定点 + 吸引子（判据） | `CheckWall.cpp` 的 `w8d_static_balance` |
 
 ## 13. 已知盲区
@@ -597,7 +597,7 @@ h_top    = (Nz - 1/2 - z) - a
 把粒子往壁里推 —— 一条无诊断的错物理路径。所以：
 
 - `wall_force_z` **不兜底、不 clamp**（与 `Velocity.cpp` 的「z 向从不折叠」同一立场）
-- `main.cpp` 的 `check_wall_bounds` 在 `wall_pot != none` 时把合法区间**收紧**到
+- `main.cpp` 的 `check_wall_bounds` 在 `wallpotential != none` 时把合法区间**收紧**到
   `z ∈ [−1/2 + a, Nz − 1/2 − a]`，即 `h > 0`；越界即中止
 
 ### 15.5 平衡高度与「上壁没有平衡点」
@@ -627,7 +627,7 @@ h_top    = (Nz - 1/2 - z) - a
 | # | 判据 | 实测 | 阈值 |
 |---|---|---|---|
 | **W8a** | `F_z = −dU_wall/dz` 四阶差分对照（WCA/Morse/LJ，力跨 ≥2 量级） | max 相对差 **2.7e-10** | < 1e-6 |
-| **W8a** | `wall_pot = none` 时所有 z 上 `F_z` 逐位为 0 | **0** | 逐位 |
+| **W8a** | `wallpotential = none` 时所有 z 上 `F_z` 逐位为 0 | **0** | 逐位 |
 | **W8b** | 上下壁镜像 `F_z(Nz−1−z) = −F_z(z)`（整数/半整数位置） | **0.000e+00** | 逐位 |
 | **W8b** | 同上，亚格点位置 | **0.000e+00** | < 1e-14 |
 | **W8c** | 体相（min(h) > rcut）内 `F_z` 逐位为 0 | **0** | 逐位 |
@@ -637,7 +637,7 @@ h_top    = (Nz - 1/2 - z) - a
 | **W8e** | GPU vs CPU 装配一致（关掉粒子间势以隔离壁面项） | **0.000e+00** | < 1e-12 |
 | **W8e** | 下壁平衡点上总力 = 0；上壁镜像处总力 = 2·g_z | **7.3e-14** / 精确 | < 1e-10 |
 
-回归锚（`wall_pot = none` 时必须**逐字节不动**）：
+回归锚（`wallpotential = none` 时必须**逐字节不动**）：
 
 - `--check-wall` 的 W1–W7 全部数字不变
 - `--check` / `--check-potential` / `--check-tridiag` / `--lambda` 输出不变
@@ -657,7 +657,7 @@ h_top    = (Nz - 1/2 - z) - a
 |---|---|---|
 | 与产生检查点的配置一致 | **0.000e+00** | PASS |
 | `wall_eps` 减半 | **6.806e+00** | FAIL |
-| `wall_pot = none` | **1.361e+01** | FAIL |
+| `wallpotential = none` | **1.361e+01** | FAIL |
 
 两个 FAIL 的幅度都与「壁面力 ≈ 10」自洽，而且**没有一个判据能靠"两边一起错"自洽通过**
 （把 `wall_eps` 改掉时文件里的 F 是旧值、重算的 F 是新值，两者不会一起漂）。
