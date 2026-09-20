@@ -69,7 +69,7 @@ struct FpdConfig
 
     unsigned long long seed = 1234ULL;
 
-    // 显式设置过的 key 名（防「用不到的参数被静默忽略」）
+    // 显式设置过的 key 名，用于所选势模型的必填参数检查
     std::vector<std::string> keys_given;
 };
 
@@ -93,6 +93,7 @@ std::vector<FieldDesc> config_fields(FpdConfig& c);
 // 全部返回 true 表示成功；失败时 err 里是可直接给用户看的中文说明。
 bool load_config(const char* path, FpdConfig& c, std::string& err);
 bool apply_override(FpdConfig& c, const char* kv, std::string& err);   // "kT=1.0"
+// 检查势名称、移位名称及所选势的必填参数；数值范围由使用者保证。
 bool validate_config(const FpdConfig& c, std::string& err);
 
 // 归档最终配置。附带打印派生量（标注为 derived，不可作为输入）。

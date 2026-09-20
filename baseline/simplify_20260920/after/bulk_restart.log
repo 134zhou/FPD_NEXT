@@ -1,0 +1,5 @@
+从 /home/doll/Documents/C++/FPD_NEXT/baseline/simplify_20260920/after/bulk_split_0000100.fpd 载入（step=100，N=1，rng_draws=19660800）
+开始模拟：32x32x32  N=1  dt=0.002  kT=0.25  W=15.8114  a=3.2  eta_c/eta_l=50  步数 100 -> 200
+step       100   R = (16.2992, 16.7017, 16.4984)   0.0 步/秒
+step       150   R = (16.3001, 16.7023, 16.4983)   916.1 步/秒
+完成

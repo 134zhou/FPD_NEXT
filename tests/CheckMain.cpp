@@ -44,6 +44,11 @@ int main(int argc, char** argv)
         return fails;
     }
 
+    if (argc > 1 && std::strcmp(argv[1], "--check-config") == 0)
+    {
+        return run_config_check();
+    }
+
     // 势函数自检：纯 CPU，无卡可跑
     if (argc > 1 && std::strcmp(argv[1], "--check-potential") == 0)
     {
@@ -88,6 +93,7 @@ int main(int argc, char** argv)
     }
 
     std::cerr << "用法: fpd_check --check\n"
+              << "      fpd_check --check-config\n"
               << "      fpd_check --check-potential\n"
               << "      fpd_check --check-tridiag\n"
               << "      fpd_check --check-poisson [Nx Ny Nz]\n"

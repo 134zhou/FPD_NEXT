@@ -23,6 +23,7 @@ cmake -B build && cmake --build build -j
 ./build/fpd config/smoke.cfg --set n_steps=200
 ./build/fpd_check --check
 ./build/fpd_check --check-potential
+./build/fpd_check --check-config
 ./build/fpd_check --check-poisson
 ./build/fpd_check --check-wall
 ./build/fpd_check --lambda 32
@@ -85,7 +86,7 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
 | Wall.h、Stokes.cpp、Viscosity.cpp | --check-wall；同步 PressurePoisson.md §14 |
 | Potential.h/.cpp、Wall.h、main.cpp 越界逻辑 | --check-wall，含 W8；壁面力改动同步 §15 |
 | 势公式 | --check-potential，保持能量与导数独立实现 |
-| 配置/主流程精简 | 配置回归、合法输入检查点前后对照、单粒子重启 |
+| 配置/主流程精简 | --check-config、合法输入检查点前后对照、单粒子重启 |
 | 二进制 IO 任一侧 | 下述 C++/Python 互操作检查 |
 
 --check-wall 覆盖 W1–W6、W4s、W5'a/W5b 及 W8；W8e 是近壁 GPU/CPU 力装配对照。

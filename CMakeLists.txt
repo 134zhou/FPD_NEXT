@@ -56,6 +56,7 @@ target_link_libraries(fpd PRIVATE fpd_core)
 add_executable(fpd_check
     tests/Analysis.cpp
     tests/CheckMain.cpp
+    tests/CheckConfig.cpp
     tests/CheckStencil.cpp
     tests/CheckPotential.cpp
     tests/CheckPoisson.cpp

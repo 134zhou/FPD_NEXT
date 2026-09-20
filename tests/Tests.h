@@ -16,6 +16,9 @@ int run_force_conservation_check(NS_Config cfg, PhiParams pp);
 // Phase 1 自检：多粒子重叠（N=2，C2 的判决性判据）（需要 GPU）
 int run_overlap_check(NS_Config cfg, PhiParams pp);
 
+// 配置解析、必填参数与归档往返（纯 CPU）
+int run_config_check();
+
 // 势函数自检（纯 CPU，无卡可跑）：力=-dU/dr、黄金表、最小镜像、N=3、特征点
 int run_potential_check();
 

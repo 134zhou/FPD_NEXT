@@ -35,7 +35,6 @@ static int run_production(const FpdConfig& c)
     PhiParams pp  = make_phi_params(c);
 
     std::string err;
-    if (!ensure_dir(c.out_dir, err)) { std::cerr << "错误: " << err << "\n"; return 2; }
 
     // --- 决定初始状态：来自 .fpd 还是内置默认 ---
     CkptHeader h;

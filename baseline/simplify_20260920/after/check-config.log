@@ -1,0 +1,27 @@
+  基础必填项缺失报错  PASS
+  重复键最后生效，--set 最后覆盖  PASS
+  未知键报错且无拼写建议  PASS
+  --set 未知键无拼写建议  PASS
+  非法数值字符串报错  PASS
+  配置和 --set 缺少等号报错  PASS
+  非法势名称报错  PASS
+  非法移位名称报错  PASS
+  未使用的已知势参数允许存在  PASS
+  数值范围由使用者负责  PASS
+  potential=none 必填参数可由 --set 补齐  PASS
+  potential=none 全字段归档往返一致且无平衡位置预测  PASS
+  potential=wca 必填参数可由 --set 补齐  PASS
+  potential=wca 全字段归档往返一致且无平衡位置预测  PASS
+  potential=morse 必填参数可由 --set 补齐  PASS
+  potential=morse 全字段归档往返一致且无平衡位置预测  PASS
+  potential=lj126 必填参数可由 --set 补齐  PASS
+  potential=lj126 全字段归档往返一致且无平衡位置预测  PASS
+  wallpotential=none 必填参数可由 --set 补齐  PASS
+  wallpotential=none 全字段归档往返一致且无平衡位置预测  PASS
+  wallpotential=wca 必填参数可由 --set 补齐  PASS
+  wallpotential=wca 全字段归档往返一致且无平衡位置预测  PASS
+  wallpotential=morse 必填参数可由 --set 补齐  PASS
+  wallpotential=morse 全字段归档往返一致且无平衡位置预测  PASS
+  wallpotential=lj126 必填参数可由 --set 补齐  PASS
+  wallpotential=lj126 全字段归档往返一致且无平衡位置预测  PASS
+配置回归：全部通过

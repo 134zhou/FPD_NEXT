@@ -112,19 +112,19 @@ static bool set_field(const FieldDesc& f, const std::string& val, std::string& e
     return false;
 }
 
-// 未知 key 时给出「你是不是想写 X」的提示（前缀匹配 + 长度接近）
-static std::string suggest(const std::vector<FieldDesc>& tab, const std::string& key)
+// 配置文件与 --set 共用字段查找和赋值，返回字段下标供必填项记录使用。
+static int assign_field(const std::vector<FieldDesc>& tab, const std::string& key,
+                        const std::string& val, std::string& err)
 {
-    std::string best;
     for (size_t i = 0; i < tab.size(); i++)
     {
-        const std::string k = tab[i].key;
-        size_t n = k.size() < key.size() ? k.size() : key.size();
-        size_t common = 0;
-        while (common < n && k[common] == key[common]) { common++; }
-        if (common >= 3 && common > best.size()) { best = k; }
+        if (key == tab[i].key)
+        {
+            return set_field(tab[i], val, err) ? (int)i : -1;
+        }
     }
-    return best.empty() ? "" : ("  你是不是想写 '" + best + "'？");
+    err = "未知的配置项 '" + key + "'";
+    return -1;
 }
 
 bool load_config(const char* path, FpdConfig& c, std::string& err)
@@ -162,31 +162,10 @@ bool load_config(const char* path, FpdConfig& c, std::string& err)
         const std::string key = trim(line.substr(0, eq));
         const std::string val = trim(line.substr(eq + 1));
 
-        size_t hit = tab.size();
-        for (size_t i = 0; i < tab.size(); i++)
+        const int hit = assign_field(tab, key, val, err);
+        if (hit < 0)
         {
-            if (key == tab[i].key) { hit = i; break; }
-        }
-        // 未知 key 必须报错退出 —— 静默忽略拼错的键是最常见的浪费一天的事故
-        if (hit == tab.size())
-        {
-            std::ostringstream o;
-            o << path << ":" << lineno << " 未知的配置项 '" << key << "'" << suggest(tab, key);
-            err = o.str();
-            return false;
-        }
-        if (seen[hit])
-        {
-            std::ostringstream o;
-            o << path << ":" << lineno << " 配置项 '" << key << "' 重复出现";
-            err = o.str();
-            return false;
-        }
-        if (!set_field(tab[hit], val, err))
-        {
-            std::ostringstream o;
-            o << path << ":" << lineno << " " << err;
-            err = o.str();
+            err = std::string(path) + ":" + std::to_string(lineno) + " " + err;
             return false;
         }
         seen[hit] = true;
@@ -224,42 +203,9 @@ bool apply_override(FpdConfig& c, const char* kv, std::string& err)
     const std::string key = trim(s.substr(0, eq));
     const std::string val = trim(s.substr(eq + 1));
 
-    std::vector<FieldDesc> tab = config_fields(c);
-    for (size_t i = 0; i < tab.size(); i++)
-    {
-        if (key == tab[i].key)
-        {
-            if (!set_field(tab[i], val, err)) { return false; }
-            c.keys_given.push_back(key);
-            return true;
-        }
-    }
-    err = std::string("--set 用了未知的配置项 '") + key + "'" + suggest(tab, key);
-    return false;
-}
-
-// 势参数查表的 helper：防「用不到的参数被静默忽略」。
-//
-// ⚠️ 粒子间势（pot_* / potential）与壁面势（wall_* / wallpotential）【共用这三个函数】，
-//    靠 prefix 参数区分。曾经想过复制一份 wall_ 版，否掉了 ——
-//    复制粘贴后各自漂移正是 C1/C2 的成因。
-
-// 某个 key 是否属于这一组势参数。简单来说就是判断前缀对不对
-static bool is_pot_param(const std::string& key, const char* prefix)
-{
-    const size_t n = std::strlen(prefix);
-    return key.size() > n && key.compare(0, n, prefix) == 0;
-}
-
-// 当前选择的势是否需要这个参数。
-static bool potential_uses(const std::string& pot, const std::string& key,
-                           const char* prefix)
-{
-    auto p = [prefix](const char* suffix) { return std::string(prefix) + suffix; };
-    if (pot == "wca")   { return key == p("eps") || key == p("sigma"); }
-    if (pot == "morse") { return key == p("De") || key == p("alpha") || key == p("r_eq") || key == p("rcut"); }
-    if (pot == "lj126") { return key == p("eps") || key == p("sigma") || key == p("rcut"); }
-    return false;
+    if (assign_field(config_fields(c), key, val, err) < 0) { return false; }
+    c.keys_given.push_back(key);
+    return true;
 }
 
 // 用户是否真的明确提供过这个参数。
@@ -269,76 +215,9 @@ static bool was_given(const std::vector<std::string>& keys, const std::string& k
     return false;
 }
 
-// ---------------------------------------------------------------------------
-// 壁面势的平衡间隙 h_rest：二分反解 |F_wall(h)| = |g_z|。
-//
-// 两个用处：
-//   1. dump_config 的派生量行 —— 让人一眼看出「粒子会停在哪」（配错了立刻可见）
-//   2. 残余力比的采样下界（见 validate_config 里的注释）
-//
-// 用【单壁近似】：平衡点离壁必 < rcut <= Nz/2，所以对面那面壁的贡献恒为 0。
-// gz = 0 时没有平衡点（势把粒子推回体相），返回 false，调用方退回约定下界。
-// 势太软、在最深可达间隙仍压不住重力时也返回 false —— 那是【配置错误】，不是数值问题。
-// ---------------------------------------------------------------------------
-static bool wall_rest_gap(WallParams wp, double gz, double& h_rest)
-{
-    if (wp.pot.type == POT_NONE) { return false; }
-    const double target = std::fabs(gz);
-    if (target <= 0.0) { return false; }
-    if (wp.pot.rcut <= 0.0) { return false; }
-
-    // F(h) = pair_force_over_r(h²)·h 在 (0, rcut) 上单调递减：+∞ → 0
-    auto F = [&wp](double h) { return pair_force_over_r(wp.pot, h * h) * h; };
-    double lo = 1e-3 * wp.pot.rcut, hi = wp.pot.rcut;
-    if (F(lo) <= target) { return false; }   // 势太软：重力能压穿
-
-    for (int it = 0; it < 200; it++)
-    {
-        const double mid = 0.5 * (lo + hi);
-        if (F(mid) > target) { lo = mid; } else { hi = mid; }
-    }
-    h_rest = 0.5 * (lo + hi);
-    return true;
-}
-
+// 只检查势名称和必填参数；数值范围、截断与稳定性由使用者保证。
 bool validate_config(const FpdConfig& c, std::string& err)
 {
-    if (c.Nx <= 0 || c.Ny <= 0 || c.Nz <= 0)
-    { err = "Nx/Ny/Nz 必须为正"; return false; }
-    if (c.dt <= 0.0)   { err = "dt 必须为正"; return false; }
-    if (c.kT < 0.0)    { err = "kT 不能为负"; return false; }
-    if (c.radius <= 0.0) { err = "radius 必须为正"; return false; }
-    if (c.xi <= 0.0)   { err = "xi 必须为正"; return false; }
-    if (c.ratio_eta < 1.0) { err = "ratio_eta 必须 >= 1（粒子不能比溶剂稀）"; return false; }
-    if (c.n_steps < 0) { err = "n_steps 不能为负"; return false; }
-    if (c.interval_ckpt <= 0) { err = "interval_ckpt 必须为正"; return false; }
-    if (c.interval_log  <= 0) { err = "interval_log 必须为正"; return false; }
-
-    // z 向边界固定为上下无滑移硬壁，因此这是无条件的网格约束。
-    if (c.Nz < 2)
-    {
-        err = "z 向无滑移硬壁要求 Nz >= 2（两面壁之间至少要有 1 个自由 z 面）";
-        return false;
-    }
-
-    // 相场支撑域：x/y 是周期的，粒子仍会通过周期边界与自己作用；z 向不周期，
-    // 但同样需要 Nz 装得下「离两壁都 >= range」的粒子。
-    PhiParams pp = make_phi_params(c);
-    const int nmin = c.Nx < c.Ny ? (c.Nx < c.Nz ? c.Nx : c.Nz) : (c.Ny < c.Nz ? c.Ny : c.Nz);
-    if (pp.n_range > nmin)
-    {
-        std::ostringstream o;
-        o << "盒子太小：相场模板盒边长 " << pp.n_range
-          << " 超过了最短的网格边 " << nmin
-          << "（x/y 周期方向粒子会与自己作用；z 向也放不下离两壁各 "
-          << (pp.n_range / 2) << " 的粒子）";
-        err = o.str();
-        return false;
-    }
-
-    // --- 势函数检查：合法性 ---
-    // 粒子间势与壁面势共用同一套 enum 与同一段逻辑，只换 prefix/potential_key。
-    // 「加新势族要改三处、漏一处就静默」正是这个 helper 要消灭的东西。
     struct PotFamily
     {
         const char* prefix;        // "pot_" / "wall_"
@@ -366,18 +245,6 @@ bool validate_config(const FpdConfig& c, std::string& err)
             return false;
         }
 
-        // 用不到的势参数报错（静默忽略是浪费一天的事故）
-        for (size_t i = 0; i < c.keys_given.size(); i++)
-        {
-            const std::string& k = c.keys_given[i];
-            if (is_pot_param(k, F.prefix) && k != F.shift_key &&
-                !potential_uses(pn, k, F.prefix))
-            {
-                err = std::string(F.potential_key) + " = " + pn + " 用不到 " + k +
-                      "，请删掉它或改 " + F.potential_key;
-                return false;
-            }
-        }
         // 需要的势参数必须给（不给默认值兜底，与必填项一致）
         {
             auto p = [&F](const char* suffix) { return std::string(F.prefix) + suffix; };
@@ -402,108 +269,6 @@ bool validate_config(const FpdConfig& c, std::string& err)
         }
     }
 
-    // --- 最小镜像硬约束：rcut < min(N)/2（严格小于，等号会双重计数镜像）---
-    // ⚠️ z 不再周期，最小镜像【不作用于 z】⇒ Nz 不该参与这个上界。
-    //    用 min(Nx,Ny) 而不是 min(Nx,Ny,Nz)：否则 z 向薄盒子会被无理由拒绝。
-    if (c.potential != "none")
-    {
-        PotentialParams potp = make_potential_params(c);
-        const int nmin_eff = c.Nx < c.Ny ? c.Nx : c.Ny;
-        const double half = 0.5 * (double)nmin_eff;
-        if (potp.rcut >= half)
-        {
-            std::ostringstream o;
-            o << "势截断 rcut = " << potp.rcut << " 不小于最短周期网格边的一半 " << half
-              << "（周期方向只有 x/y，取 min(Nx,Ny) = " << nmin_eff
-              << "），最小镜像约定不成立";
-            err = o.str();
-            return false;
-        }
-
-        // 残余力比：|U'(rcut)| / max|U'|，> 1e-6 报警（shift=force 时力在 rcut 恒 0，跳过）。
-        // 峰值在【物理可达区】[2a, rcut] 上取 —— 下界是粒子直径 2a，更近就重叠了，
-        // 那里 U' 可大几个量级但物理不可达，会稀释残余力比。
-        if (c.pot_shift != "force")
-        {
-            const double r_lo = 2.0 * c.radius;
-            double max_du = 0.0;
-            for (int k = 0; k <= 500; k++)
-            {
-                const double r  = r_lo + (potp.rcut - r_lo) * (double)k / 500.0;
-                const double du = std::fabs(pair_force_over_r_bare(potp, r) * r);
-                if (du > max_du) { max_du = du; }
-            }
-            const double du_rc   = std::fabs(pair_force_over_r_bare(potp, potp.rcut) * potp.rcut);
-            const double rho_res = max_du > 0.0 ? du_rc / max_du : 0.0;
-            if (rho_res > 1e-6)
-            {
-                fprintf(stderr,
-                        "[警告] 势在 rcut=%g 处残余力比 |U'(rcut)|/max|U'| = %.3e > 1e-6，"
-                        "能量移位后力仍跳变。可改 pot_shift=force（改势形状）、调大盒子或调 pot_alpha\n",
-                        potp.rcut, rho_res);
-            }
-        }
-    }
-
-    // --- 壁面排斥势 ---
-    // 壁面是【非周期】的，所以上面那条最小镜像硬约束不适用（没有镜像可双重计数）。
-    if (c.wallpotential != "none")
-    {
-        WallParams wp = make_wall_params(c);
-
-        // 体相区长度 = Nz - 2*wall_rcut。小于 0 意味着每个粒子都同时受两面壁作用。
-        // 强受限体系可能【有意】如此，所以只警告不拒绝（与 dt 稳定性上界同一原则）。
-        if (2.0 * wp.pot.rcut > (double)c.Nz)
-        {
-            fprintf(stderr,
-                    "[警告] 2*wall_rcut = %g > Nz = %d：盒子里没有「同时离两壁都超过截断」"
-                    "的体相区，每个粒子都同时受两面壁作用。若非有意，请调小 wall_rcut "
-                    "或加大 Nz\n", 2.0 * wp.pot.rcut, c.Nz);
-        }
-
-        // 残余力比：|U'(rcut)| / max|U'|，> 1e-6 报警。
-        // ⚠️ 采样下界用【平衡间隙 h_rest】而不是 0。壁面势的物理可达区是
-        //    [h_rest, rcut]（粒子停在 h_rest 附近）。若照抄粒子间势用 [0, rcut]，
-        //    h→0 处 U' 大几个量级会把比值稀释到永远低于报警线，判据变成哑的。
-        if (c.wall_shift != "force")
-        {
-            double h_rest = 0.0;
-            const bool have_rest = wall_rest_gap(wp, c.gravity_z, h_rest);
-            if (c.gravity_z != 0.0 && !have_rest)
-            {
-                fprintf(stderr,
-                        "[警告] 壁面势在最深可达间隙处的排斥力仍小于 |gravity_z| = %g，"
-                        "粒子会在重力下压穿壁面势。请调大 wall_eps 或减小 gravity_z\n",
-                        std::fabs(c.gravity_z));
-            }
-            const double r_lo = have_rest ? h_rest : 0.1 * wp.pot.rcut;
-            double max_du = 0.0;
-            for (int k = 0; k <= 500; k++)
-            {
-                const double r  = r_lo + (wp.pot.rcut - r_lo) * (double)k / 500.0;
-                const double du = std::fabs(pair_force_over_r_bare(wp.pot, r) * r);
-                if (du > max_du) { max_du = du; }
-            }
-            const double du_rc   = std::fabs(pair_force_over_r_bare(wp.pot, wp.pot.rcut) * wp.pot.rcut);
-            const double rho_res = max_du > 0.0 ? du_rc / max_du : 0.0;
-            if (rho_res > 1e-6)
-            {
-                fprintf(stderr,
-                        "[警告] 壁面势在 wall_rcut=%g 处残余力比 |U'(rcut)|/max|U'| = %.3e "
-                        "> 1e-6（采样区间 [%g, %g]）。可改 wall_shift=force、调大 wall_rcut "
-                        "或调 wall_alpha\n", wp.pot.rcut, rho_res, r_lo, wp.pot.rcut);
-            }
-        }
-    }
-
-    // 显式粘性项的稳定性上界，只警告不拒绝（用户可能在做 dt 扫描）
-    const double dt_max = 1.0 / (2.0 * 3.0 * c.ratio_eta);
-    if (c.dt > dt_max)
-    {
-        fprintf(stderr,
-                "[警告] dt = %g 超过显式粘性稳定上界 rho*dx^2/(2*d*eta_c) = %g，很可能发散\n",
-                c.dt, dt_max);
-    }
     return true;
 }
 
@@ -523,25 +288,6 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
     ofs << "# 本次运行实际使用的配置（自动生成，可直接作为输入重跑）\n";
     for (size_t i = 0; i < tab.size(); i++)
     {
-        // 跳过当前 potential 用不到的势参数：dump 出「用不到」会让 config.used
-        // 重跑时 validate_config 报错（完整 dump vs 用不到报错的矛盾）。
-        // 粒子间势与壁面势各跑一遍，同一段逻辑（见 is_pot_param 的注释）。
-        const std::string k = tab[i].key;
-        {
-            struct { const char* prefix; const char* shift_key;
-                     const std::string* pot; } fams[2] = {
-                {"pot_",  "pot_shift",  &c.potential },
-                {"wall_", "wall_shift", &c.wallpotential },
-            };
-            bool skip = false;
-            for (int f = 0; f < 2 && !skip; f++)
-            {
-                if (!is_pot_param(k, fams[f].prefix)) { continue; }
-                if (k == fams[f].shift_key) { skip = (*fams[f].pot == "none"); }
-                else { skip = !potential_uses(*fams[f].pot, k, fams[f].prefix); }
-            }
-            if (skip) { continue; }
-        }
         ofs << tab[i].key << " = ";
         switch (tab[i].type)
         {
@@ -577,24 +323,9 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
     if (c.wallpotential != "none")
     {
         WallParams wp = make_wall_params(c);
-        double h_rest = 0.0;
-        const bool have_rest = wall_rest_gap(wp, c.gravity_z, h_rest);
         ofs << "# wallpotential   = " << c.wallpotential << "   shift = " << c.wall_shift
             << "   rcut = " << wp.pot.rcut << "   a = " << wp.radius << "\n";
         ofs << "#   U(rcut) = " << wp.pot.u_at_rc << "   U'(rcut) = " << wp.pot.dudr_at_rc << "\n";
-        // 平衡间隙是运维时唯一能一眼看出「壁面势配错了」的数（配软了压在壁上、
-        // 配硬了粒子悬在半空）。配不出平衡点时要明说，不能只留个空白。
-        ofs << "#   h_rest  = ";
-        if (have_rest)
-        {
-            ofs << h_rest << "   (解 |F_wall(h)| = |gravity_z| = "
-                << std::fabs(c.gravity_z) << ")\n";
-            ofs << "#   粒子中心静止高度 z_rest = " << (-0.5 + wp.radius + h_rest) << "\n";
-        }
-        else
-        {
-            ofs << "无（gravity_z = 0，或势太软压不住重力）\n";
-        }
     }
     ExternalField ext = make_external_field(c);
     if (ext.gx != 0.0 || ext.gy != 0.0 || ext.gz != 0.0)
