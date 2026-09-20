@@ -38,9 +38,10 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
 ## 可信输入与精简原则
 
 - 用户负责数值范围、物理可行性、时间步稳定性、模板盒与截断半径限制。
-- 保留基础必填项和所选势模型的必填参数；基础项在读配置时检查，势参数在 --set 后检查。
+- 必须提供 init_file；Nx/Ny/Nz 只来自其头部，配置和 --set 显式给出就报错。
+- 保留基础必填项和所选势模型的必填参数；基础项和势参数在处理完 --set 后检查。
 - 保留语法、数值转换、未知键、势名称与移位名称的基本报错；不做拼写建议。
-- 重复键最后赋值生效；已知但当前模型不用的参数允许存在；配置归档输出全部字段。
+- 重复键最后赋值生效；已知但当前模型不用的参数允许存在；配置归档输出全部可配置字段。
 - 不添加范围/组合检查、参数预测警告、严格/宽松模式或面向通用用户的防御层。
 - 保留实际穿墙、NaN/Inf、初态边界一致性、文件完整性、读写失败及 GPU 库错误检查。
 - 数值判据验证算法正确性，继续保留；CPU/GPU 独立参考不能互调。
@@ -70,7 +71,7 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
 - 速度/噪声边界属于 Wall.h；粒子壁面力属于 Potential.h，二者分开维护。
   壁面力使用表面间隙 h，要求 h>0；不对负间隙 clamp，保留运行中越界中止。
 - 壁面剪切噪声幅度 ×√2 只作用于两壁的 EDGE_YZ/EDGE_ZX；公式见 §14。
-- Philox 每步按 `(2*step+c)*size*3` 设置 offset；rng_draws 仅供记录，不参与恢复。
+- Philox 每步按 `(2*step+c)*size*3` 设置 offset；不从存档恢复 RNG 状态。
 - 固定粒子数和 GPU 配置下保持力求和顺序；不引入粒子力 atomic 求和。
 - 相场支撑域重叠时粘度 atomic 导致跨进程末位差异；逐位重启只承诺不重叠情况。
 - 不把旧代码作为定量真值；独立参考不得复制待测实现的模板盒等假设。
@@ -96,9 +97,10 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
 
 ## IO 与可视化
 
-C++ 只读写 .fpd；init_file 同时用于初态和重启，文件 step 决定起点。
-n_steps 是绝对目标步数。配置中的 seed 优先，逐位重启须保持同一配置。
-格式由 src/include/IOBin.h 与 tools/fpd_format.py 共同定义，当前版本为 2。
+C++ 只读写 .fpd；init_file 必填，同一文件格式用于初态和重启，文件 step 决定起点。
+n_steps 是绝对目标步数。网格尺寸、N、step 来自文件，其余参数来自配置；逐位重启须保持同一配置和 seed。
+格式由 src/include/IOBin.h 与 tools/fpd_format.py 共同定义，当前版本为 3；v2 明确拒绝。
+头部只有尺寸、N、step 等布局元数据；.config.used 不含尺寸键，离线工具用 --config 读取物理量。
 numpy 形状必须为 (Nz, Ny, Nx)；版本、字段顺序与 FNV-1a 两侧同步。
 
 ```bash
@@ -106,9 +108,10 @@ python3 tools/make_init.py --grid 8 4 2 --pattern index --empty -o /tmp/t.fpd
 ./build/fpd_tool --dump-ckpt /tmp/t.fpd --at 3 1 1  # 必须为 3001001
 PV=/home/doll/Software/ParaView-6.2.0-RC1-MPI-Linux-Python3.12-x86_64
 $PV/bin/pvpython tools/fpd2vtk.py --self-test
-$PV/bin/pvpython tools/fpd2vtk.py out/run_*.fpd -o vis/
+$PV/bin/pvpython tools/fpd2vtk.py out/run_*.fpd --config config/production.cfg -o vis/
 ```
 
 make_init.py 仅依赖 stdlib；转换和 verify_vtk.py 必须使用 pvpython。
+.fpd 不保存压力，压力仅在求解器内部及数值判据中使用；沉降统计需 --config。
 用户自行转换可视化，提供命令即可；ParaView 打开生成的 .pvd。
 沉降数据选择 out/sed_[0-9]*.fpd，避免包含或删除 sed_init.fpd。

@@ -1,0 +1,46 @@
+# 本次运行实际使用的配置（自动生成，可直接作为输入重跑）
+dt = 0.002
+n_steps = 50
+kT = 0.25
+radius = 3.2000000000000002
+xi = 1
+ratio_eta = 50
+gravity_z = -10
+gravity_x = 0
+gravity_y = 0
+noise_on = 1
+potential = none
+pot_eps = 0
+pot_sigma = 0
+pot_De = 0
+pot_alpha = 0
+pot_r_eq = 0
+pot_rcut = 0
+pot_shift = energy
+wallpotential = wca
+wall_eps = 1
+wall_sigma = 2
+wall_De = 0
+wall_alpha = 0
+wall_r_eq = 0
+wall_rcut = 0
+wall_shift = energy
+init_file = baseline/io_v3_20260921/after/wall_init.fpd
+out_dir = baseline/io_v3_20260921/after
+run_name = wall_final
+interval_ckpt = 50
+interval_log = 50
+seed = 20260920
+
+# ---- 以下为派生量，仅供记录，不是输入项 ----
+# z 向边界        = noslip (x/y 周期，z 上下无滑移硬壁)
+# 背景力密度补偿  = 0 (无滑移壁面本身就是真实的动量汇)
+# derived inv_dt   = 500
+# derived W        = 15.811388300841896   (= sqrt(2*kT/dt))
+# derived inv_xi   = 1
+# derived range    = 8
+# derived n_range  = 17
+# derived range2   = 64
+# wallpotential   = wca   shift = energy   rcut = 2.244924096618746   a = 3.2000000000000002
+#   U(rcut) = -1   U'(rcut) = 1.1869155233861306e-15
+# external_field  = (0, 0, -10)

@@ -1,0 +1,3 @@
+从 baseline/io_v3_20260921/after/bulk_split_0000025.fpd 载入（step=25，N=1）
+开始模拟：32x32x32  N=1  dt=0.002  kT=0.25  W=15.8114  a=3.2  eta_c/eta_l=50  步数 25 -> 50
+完成

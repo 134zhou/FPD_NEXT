@@ -53,35 +53,38 @@ cmake -B build && cmake --build build -j
 
 ```bash
 # 1. 生成初始构型（纯 stdlib，任何 python3 都能跑）
-python3 tools/make_init.py --grid 128 64 32 --single -o out/init.fpd
+python3 tools/make_init.py --grid 128 64 32 --single -o out/prod_init.fpd
 
 # 2. 跑模拟
-./build/fpd config/production.cfg --set init_file=out/init.fpd
+./build/fpd config/production.cfg
 
 # 3. 断点续跑：把某个检查点当 init_file 即可，同一个 key、同一段代码
 ./build/fpd config/production.cfg --set init_file=out/prod_0010000.fpd
 
 # 4. 离线转可视化（必须 pvpython —— 系统 python3 无 numpy）
 PV=/home/doll/Software/ParaView-6.2.0-RC1-MPI-Linux-Python3.12-x86_64
-$PV/bin/pvpython tools/fpd2vtk.py out/prod_*.fpd -o vis/
+$PV/bin/pvpython tools/fpd2vtk.py out/prod_*.fpd --config config/production.cfg -o vis/
 # 然后在 ParaView 里打开 vis/prod.pvd —— 一个文件给出完整时间动画 + 流体/粒子双 block
 ```
 
 格式规范在 `src/include/IOBin.h`，Python 侧镜像实现在 `tools/fpd_format.py`。
-检查点只存跨步状态（`vx,vy,vz` + `R,Ru` + 标量）加上可视化要的 `p,V,F`；
-`eta`/`sum_phi`/`f`/`pi` 全是每步重算的派生量，不存。
-128×64×32 时 8.39 MB/个，写入约 **3.9 ms**（旧 ASCII VTK 约 100 ms，快 26 倍）。
+检查点只存网格尺寸、N、step，以及 `vx,vy,vz`、`R,Ru,V,F`；
+`p`、`eta`、`sum_phi`、`f`、`pi` 都不存。
+128×64×32 时速度场约占 6.29 MB；另加粒子数组、头部和校验和。
 
 ## 配置检查约定
 
-程序按个人使用、数值输入可信设计。基础必填项须在配置文件中给出；所选势模型的
-必填参数可通过 `--set` 补齐。语法、数值转换、未知键及非法势/移位名称仍报错。
+程序按个人使用、数值输入可信设计。`init_file` 必填，`Nx/Ny/Nz` 只从其文件头读取。配置或 `--set` 显式给出任一
+尺寸键就报错；基础参数和所选势模型的参数在处理完 `--set` 后检查。语法、数值转换、未知键及非法势/移位名称仍报错。
 重复键最后赋值生效，命令行覆盖在文件之后应用；不提供键名拼写建议。
 
 参数范围、模板盒尺寸、势截断、时间步稳定性及势参数选择由使用者保证。
 配置层不再报告这些限制或预测性警告；文件完整性、初态一致性、运行异常及 GPU
-库错误检查仍保留。`.config.used` 输出全部字段，可重新作为输入。
+库错误检查仍保留。`.config.used` 输出全部可配置字段，可重新作为输入。
 CPU 配置回归：`./build/fpd_check --check-config`。
+
+v3 文件头只含尺寸、粒子数和 step，v2 文件明确拒绝。VTK 转换与沉降统计
+需显式提供同一份配置，输出中不再含压力场。
 
 ## 当前状态
 
@@ -116,7 +119,7 @@ CPU 配置回归：`./build/fpd_check --check-config`。
 瓶颈在 `Stokes.cpp` 的场 kernel —— 散度计算里对 6 个 Π 数组做了约 18 次邻居访问，
 其中 `k±1` 的跨步是 `Nx*Ny` = 64 KB，对缓存不友好。
 
-检查点写入约 **3.9 ms/次**（8.39 MB，128×64×32），相对 6.5 ms/步的主循环可忽略。
+历史 v2 检查点写入约 **3.9 ms/次**（8.39 MB，128×64×32）；v3 删除压力数组后约 6.29 MB，尚未重测写入时间。
 
 > **性能优化尚未立项**（一直是先保正确性）。Phase 4 的 L=192 立方盒是 27 倍网格量，
 > 排期按实测数算，别用「小盒子会快很多」的直觉。
@@ -429,7 +432,7 @@ wall_eps   = 1.0             # 与 gravity_z=-10 配出 h_rest ≈ 2.019
 ```bash
 python3 tools/make_init.py --grid 128 64 32 --phi 0.05 --seed 20260914 -o out/sed_init.fpd
 ./build/fpd config/sed.cfg                        # 128x64x32, N=95, 200k 步 ≈ 29 分钟
-./build/fpd_tool --sed-stats out/sed_[0-9]*.fpd   # <Vz>(t) / 质心 / 最小壁面间隙 / φ(z)
+./build/fpd_tool --sed-stats out/sed_[0-9]*.fpd --config config/sed.cfg   # <Vz>(t) / 质心 / 最小壁面间隙 / φ(z)
 ```
 
 ⚠️ `--phi` 会打印**两个**体积分数：标称解析球 `(4/3)πa³` 与扩散界面

@@ -1,0 +1,6 @@
+从 baseline/io_v3_20260921/before/wall_init.fpd 载入（step=0，N=1，rng_draws=0）
+壁面势: wca   shift=energy   rcut=2.24492   a=3.2（自变量是表面间隙 h = z_壁 - a）
+外场: (0, 0, -10)   背景补偿 = 0（壁面即动量汇）
+开始模拟：32x32x32  N=1  dt=0.002  kT=0.25  W=15.8114  a=3.2  eta_c/eta_l=50  步数 0 -> 50
+step         0   R = (16.3000, 16.7000, 4.7000)   0.0 步/秒
+完成
