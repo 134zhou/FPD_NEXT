@@ -244,7 +244,7 @@ bool apply_override(FpdConfig& c, const char* kv, std::string& err)
 //    靠 prefix 参数区分。曾经想过复制一份 wall_ 版，否掉了 ——
 //    复制粘贴后各自漂移正是 C1/C2 的成因。
 
-// 某个 key 是否属于这一组势参数。
+// 某个 key 是否属于这一组势参数。简单来说就是判断前缀对不对
 static bool is_pot_param(const std::string& key, const char* prefix)
 {
     const size_t n = std::strlen(prefix);
@@ -415,8 +415,7 @@ bool validate_config(const FpdConfig& c, std::string& err)
             std::ostringstream o;
             o << "势截断 rcut = " << potp.rcut << " 不小于最短周期网格边的一半 " << half
               << "（周期方向只有 x/y，取 min(Nx,Ny) = " << nmin_eff
-              << "），最小镜像约定不成立"
-              << "（旧代码 cutoff=22.2 配 Nz=32 正是这个错误）";
+              << "），最小镜像约定不成立";
             err = o.str();
             return false;
         }

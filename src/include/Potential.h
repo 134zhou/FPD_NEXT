@@ -20,7 +20,16 @@
 // ============================================================================
 
 enum PotentialType { POT_NONE = 0, POT_WCA = 1, POT_MORSE = 2, POT_LJ126 = 3 };
-enum ShiftMode     { SHIFT_NONE = 0, SHIFT_ENERGY = 1, SHIFT_FORCE = 2 };
+enum ShiftMode     { SHIFT_NONE = 0, SHIFT_ENERGY = 1, SHIFT_FORCE = 2 };//如何从原始势平滑地变成零
+//SHIFT_NONE直接截断，不平滑，
+// 适合 rcut 足够远、势和力都已经非常小时，
+//   - 势能可能突然变化
+//   - 力可能突然变化
+//   - 粒子跨过截断点时可能受到数值冲击
+//   - 能量守恒性质较差
+//SHIFT_ENERGY移动势能零点
+// 力仍然跳变
+//SHIFT_FORCE同时让势能和力连续，但是会改变物理模型，所以默认使用SHIFT_ENERGY
 
 // POD，按值传进 GPU kernel（沿用 PhiParams 的约定）
 struct PotentialParams
