@@ -16,38 +16,18 @@
 import struct
 
 MAGIC       = b"FPDCKPT\0"
-# ⚠️ 1 → 2（Phase 8-A）：格式的含义变了 —— v1 的存档可能是 z 周期构型，
-#    其 vz[...,Nz-1] 非 0，会让压力泊松的相容性条件失效且看不出来。
-#    这里与 IOBin.cpp 的版本检查一起让它响亮地失败（两侧都要同步改）。
-VERSION     = 2
+# v3 只存尺寸、粒子数和步数；物理参数从配置读取。
+VERSION     = 3
 ENDIAN_TAG  = 0x01020304
-FLAG_PRESSURE = 0x1
-# bit 0x2 曾用于 FLAG_WALL_Z（z 向无滑移壁面构型）。已退役，【保留不复用】。
-FLAG_LEGACY_WALL_Z = 0x2
-
 FNV_OFFSET = 14695981039346656037
 FNV_PRIME  = 1099511628211
 MASK64     = (1 << 64) - 1
 
 # header 字段：(名字, struct 格式)。顺序必须与 IOBin.h 的 FPD_HEADER_FIELDS 完全一致。
 HEADER_FIELDS = [
-    ("version",   "<I"),
-    ("flags",     "<I"),
-    ("Nx",        "<i"),
-    ("Ny",        "<i"),
-    ("Nz",        "<i"),
-    ("N",         "<i"),
-    ("step",      "<q"),
-    ("dt",        "<d"),
-    ("kT",        "<d"),
-    ("radius",    "<d"),
-    ("xi",        "<d"),
-    ("ratio_eta", "<d"),
-    ("noise_on",  "<i"),
-    ("seed",      "<Q"),
-    ("rng_draws", "<Q"),
+    ("version", "<I"), ("Nx", "<i"), ("Ny", "<i"),
+    ("Nz", "<i"), ("N", "<i"), ("step", "<q"),
 ]
-
 # 粒子数组的顺序，同样必须与 C++ 侧一致
 PARTICLE_ARRAYS = ["Rx", "Ry", "Rz", "Rux", "Ruy", "Ruz",
                    "Vx", "Vy", "Vz", "Fx", "Fy", "Fz"]
@@ -73,31 +53,20 @@ def _fnv_bytes(h, buf):
     return h
 
 
-def default_header(Nx, Ny, Nz, N, dt=0.002, kT=0.25, radius=3.2, xi=1.0,
-                   ratio_eta=50.0, noise_on=1, seed=1234, step=0,
-                   rng_draws=0, has_pressure=False):
-    # z 边界不再是变量（v2 起恒为无滑移壁面），所以没有对应的标志位。
-    flags = FLAG_PRESSURE if has_pressure else 0
-    return {
-        "version": VERSION,
-        "flags": flags,
-        "Nx": Nx, "Ny": Ny, "Nz": Nz, "N": N,
-        "step": step,
-        "dt": dt, "kT": kT, "radius": radius, "xi": xi, "ratio_eta": ratio_eta,
-        "noise_on": noise_on, "seed": seed, "rng_draws": rng_draws,
-    }
+def default_header(Nx, Ny, Nz, N, step=0):
+    return {"version": VERSION, "Nx": Nx, "Ny": Ny, "Nz": Nz,
+            "N": N, "step": step}
 
 
 def write_fpd(path, header, fields, particles, chunk_doubles=1 << 20):
     """
-    fields    : dict，键 vx/vy/vz（必需）与 p（当 has_pressure 时必需）。
+    fields    : dict，键 vx/vy/vz。
                 值可以是 None 表示全零（大网格时避免在内存里造 3 个巨型列表），
                 也可以是长度为 size 的可迭代 float 序列。
     particles : dict，键见 PARTICLE_ARRAYS，值为长度 N 的序列；缺的按全零处理。
     """
     size = header["Nx"] * header["Ny"] * header["Nz"]
     N = header["N"]
-    has_p = bool(header["flags"] & FLAG_PRESSURE)
 
     h = FNV_OFFSET
 
@@ -133,8 +102,6 @@ def write_fpd(path, header, fields, particles, chunk_doubles=1 << 20):
         emit_field(fields.get("vx"))
         emit_field(fields.get("vy"))
         emit_field(fields.get("vz"))
-        if has_p:
-            emit_field(fields.get("p"))
 
         for name in PARTICLE_ARRAYS:
             vals = particles.get(name)
@@ -181,9 +148,6 @@ def field_offsets(header):
     out = {}
     for name in ("vx", "vy", "vz"):
         out[name] = (off, size)
-        off += 8 * size
-    if header["flags"] & FLAG_PRESSURE:
-        out["p"] = (off, size)
         off += 8 * size
     for name in PARTICLE_ARRAYS:
         out[name] = (off, N)

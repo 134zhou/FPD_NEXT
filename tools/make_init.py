@@ -128,10 +128,6 @@ def main():
                     help="最小间距，默认 2*radius+xi（刚好不重叠）")
     ap.add_argument("--radius", type=float, default=3.2)
     ap.add_argument("--xi", type=float, default=1.0)
-    ap.add_argument("--ratio-eta", type=float, default=50.0)
-    ap.add_argument("--dt", type=float, default=0.002)
-    ap.add_argument("--kT", type=float, default=0.25)
-    ap.add_argument("--noise-on", type=int, default=1)
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--pattern", choices=["zero", "index"], default="zero",
                     help="速度场填法；index 用于轴序互操作判据")
@@ -189,11 +185,7 @@ def main():
     N = len(pts)
     size = Nx * Ny * Nz
 
-    header = F.default_header(Nx, Ny, Nz, N,
-                              dt=a.dt, kT=a.kT, radius=a.radius, xi=a.xi,
-                              ratio_eta=a.ratio_eta, noise_on=a.noise_on,
-                              seed=a.seed, step=0, rng_draws=0,
-                              has_pressure=False)
+    header = F.default_header(Nx, Ny, Nz, N)
 
     if a.pattern == "index":
         # v[IDX(i,j,k)] = i*1e6 + j*1e3 + k，IDX = i + j*Nx + k*Nx*Ny

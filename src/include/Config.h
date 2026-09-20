@@ -13,12 +13,12 @@
 //   FpdConfig（原始物理量） --make_ns_config--> NS_Config（POD，按值进 kernel）
 //                          --make_phi_params-> PhiParams（POD，按值进 kernel）
 //
-// 配置文件里只出现【原始】物理量。派生量 W / inv_dt / range / n_range 一律由
+// 配置文件提供全部物理量，网格尺寸由 init_file 头部提供。派生量 W / inv_dt / range / n_range 一律由
 // Common.h 的两个工厂函数计算 —— 那是它们的唯一真值源（修 C10/C6 的保证）。
 // ============================================================================
 struct FpdConfig
 {
-    // --- 网格与时间（必填）---
+    // --- 网格来自 .fpd；时间步长与目标步数为必填 ---
     int    Nx = 0, Ny = 0, Nz = 0;
     double dt = 0.0;
     long   n_steps = 0;          // 【绝对】目标步数，不是「再跑多少步」
@@ -59,13 +59,12 @@ struct FpdConfig
     double wall_rcut   = 0.0;         // LJ/Morse 截断（WCA 派生，用户不应给）
     std::string wall_shift = "energy";// none | energy | force
 
-    // --- IO（可选）---
-    std::string init_file;       // .fpd；留空则用内置默认（单粒子放盒心）
+    // --- IO（init_file 必填）---
+    std::string init_file;       // .fpd 初态或续跑文件；必填
     std::string out_dir  = "out";
     std::string run_name = "run";
     long interval_ckpt = 10000;
     long interval_log  = 10000;
-    int  save_pressure = 1;      // 存 p 便于可视化；重启时忽略
 
     unsigned long long seed = 1234ULL;
 
@@ -93,7 +92,7 @@ std::vector<FieldDesc> config_fields(FpdConfig& c);
 // 全部返回 true 表示成功；失败时 err 里是可直接给用户看的中文说明。
 bool load_config(const char* path, FpdConfig& c, std::string& err);
 bool apply_override(FpdConfig& c, const char* kv, std::string& err);   // "kT=1.0"
-// 检查势名称、移位名称及所选势的必填参数；数值范围由使用者保证。
+// 检查必填项、尺寸键冲突、势名称及所选势的必填参数。
 bool validate_config(const FpdConfig& c, std::string& err);
 
 // 归档最终配置。附带打印派生量（标注为 derived，不可作为输入）。

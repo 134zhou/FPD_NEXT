@@ -4,10 +4,10 @@
 
 必须跑在 pvpython 下（需要 numpy + vtk）：
   PV=/home/doll/Software/ParaView-6.2.0-RC1-MPI-Linux-Python3.12-x86_64
-  $PV/bin/pvpython tools/fpd2vtk.py out/run_*.fpd -o vis/
+  $PV/bin/pvpython tools/fpd2vtk.py out/run_*.fpd --config config/production.cfg -o vis/
 
 产出：
-  vis/<name>_<step>.vti   流体（ImageData，CellData: velocity 插值到格心 + pressure）
+  vis/<name>_<step>.vti   流体（ImageData，CellData: velocity 插值到格心）
   vis/<name>_<step>.vtp   粒子（PolyData，PointData: V / F / Ru）
   vis/<name>_<step>.vtm   多块，把上面两个绑在一起
   vis/<name>.pvd          整个时间序列 —— 【在 ParaView 里打开这一个文件即可】
@@ -27,6 +27,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fpd_format as F
+from fpd_config import read_values
 
 
 def _need_vtk():
@@ -73,7 +74,7 @@ def stagger_to_center(vx, vy, vz, Nx, Ny, Nz):
     return cx, cy, cz
 
 
-def write_vti(path, header, arrs, with_pressure):
+def write_vti(path, header, arrs):
     vtk, ns = _need_vtk()
     Nx, Ny, Nz = header["Nx"], header["Ny"], header["Nz"]
 
@@ -93,10 +94,7 @@ def write_vti(path, header, arrs, with_pressure):
     img.GetCellData().AddArray(va)
     img.GetCellData().SetVectors(va)
 
-    if with_pressure and arrs.get("p") is not None:
-        pa = ns.numpy_to_vtk(arrs["p"].astype(np.float32), deep=1)
-        pa.SetName("pressure")
-        img.GetCellData().AddArray(pa)
+
 
     w = vtk.vtkXMLImageDataWriter()
     w.SetFileName(path)
@@ -213,7 +211,7 @@ def main():
     ap.add_argument("files", nargs="*", help=".fpd 文件，可用通配符")
     ap.add_argument("-o", "--out", default="vis", help="输出目录")
     ap.add_argument("--stride", type=int, default=1, help="每隔几个文件取一个")
-    ap.add_argument("--no-pressure", action="store_true")
+    ap.add_argument("--config", help="提供 dt 的模拟配置文件")
     ap.add_argument("--particles-only", action="store_true")
     ap.add_argument("--self-test", action="store_true", help="轴序与插值方向自检")
     a = ap.parse_args()
@@ -224,6 +222,9 @@ def main():
     if not a.files:
         ap.error("需要至少一个 .fpd 文件")
 
+    if not a.config:
+        ap.error("需要 --config")
+    dt = read_values(a.config, ("dt",))["dt"]
     files = sorted(a.files)[:: a.stride]
     if not os.path.isdir(a.out):
         os.makedirs(a.out)
@@ -241,24 +242,21 @@ def main():
                 "Vx", "Vy", "Vz", "Fx", "Fy", "Fz"]
         if not a.particles_only:
             want += ["vx", "vy", "vz"]
-            if header["flags"] & F.FLAG_PRESSURE and not a.no_pressure:
-                want += ["p"]
         arrs = read_arrays(path, header, want)
 
         vtp_name = stem + ".vtp"
         write_vtp(os.path.join(a.out, vtp_name), header, arrs)
 
         if a.particles_only:
-            entries.append((step * header["dt"], vtp_name))
+            entries.append((step * dt, vtp_name))
             print("  %s -> %s" % (path, vtp_name))
             continue
 
         vti_name = stem + ".vti"
         vtm_name = stem + ".vtm"
-        write_vti(os.path.join(a.out, vti_name), header, arrs,
-                  with_pressure=not a.no_pressure)
+        write_vti(os.path.join(a.out, vti_name), header, arrs)
         write_vtm(os.path.join(a.out, vtm_name), vti_name, vtp_name)
-        entries.append((step * header["dt"], vtm_name))
+        entries.append((step * dt, vtm_name))
         print("  %s -> %s (+ .vti/.vtp)" % (path, vtm_name))
 
     pvd = os.path.join(a.out, (base_name or "run") + ".pvd")

@@ -93,7 +93,7 @@ struct FpdState
     CkptArrays ckpt_arrays() const;
 
     // 拉回 / 推回某组数组（按 StatePart 位）。字节数在这里统一算，调用方不碰。
-    void download(unsigned bits);                   // = update self（device→host）
+    void download(unsigned bits, bool pressure = true); // 生产检查点无需回传 p；判据可按需读取
     void upload(unsigned bits);                     // = update device（host→device）
 };
 

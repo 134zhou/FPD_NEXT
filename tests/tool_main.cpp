@@ -22,7 +22,7 @@ static void usage()
     printf("  fpd_tool --dump-ckpt <file> [--at i j k]   打印头部；--at 打印指定格点的 v\n");
     printf("  fpd_tool --diff-ckpt <a> <b>              逐位比较两个检查点\n");
     printf("  fpd_tool --verify-forces <ckpt> <config>  用配置重算粒子力，与文件里的 F 对照\n");
-    printf("  fpd_tool --sed-stats <f1> <f2> ...        沉降统计：<Vz>(t)、质心、最小壁面间隙、φ(z)\n");
+    printf("  fpd_tool --sed-stats <f1> <f2> ... --config <cfg>        沉降统计：<Vz>(t)、质心、最小壁面间隙、φ(z)\n");
     printf("      [--window A B]  只统计 step ∈ [A,B] 的检查点（缺省用后一半）\n");
     printf("      [--bins K]      φ(z) 的分箱数（缺省 16）\n");
 }
@@ -30,7 +30,7 @@ static void usage()
 // 按 header 分配好数组的持有者
 struct Holder
 {
-    std::vector<double> vx, vy, vz, p;
+    std::vector<double> vx, vy, vz;
     std::vector<double> Rx, Ry, Rz, Rux, Ruy, Ruz, Vx, Vy, Vz, Fx, Fy, Fz;
     CkptArrays a;
 
@@ -39,14 +39,12 @@ struct Holder
         const size_t size = h.size();
         const size_t N = (size_t)h.N;
         vx.assign(size, 0); vy.assign(size, 0); vz.assign(size, 0);
-        if (h.has_pressure()) { p.assign(size, 0); }
         Rx.assign(N,0); Ry.assign(N,0); Rz.assign(N,0);
         Rux.assign(N,0); Ruy.assign(N,0); Ruz.assign(N,0);
         Vx.assign(N,0); Vy.assign(N,0); Vz.assign(N,0);
         Fx.assign(N,0); Fy.assign(N,0); Fz.assign(N,0);
 
         a.vx = vx.data(); a.vy = vy.data(); a.vz = vz.data();
-        a.p  = h.has_pressure() ? p.data() : 0;
         a.Rx = Rx.data(); a.Ry = Ry.data(); a.Rz = Rz.data();
         a.Rux = Rux.data(); a.Ruy = Ruy.data(); a.Ruz = Ruz.data();
         a.Vx = Vx.data(); a.Vy = Vy.data(); a.Vz = Vz.data();
@@ -67,24 +65,6 @@ static int cmd_dump(int argc, char** argv)
     printf("  网格         %d x %d x %d   (size = %zu)\n", h.Nx, h.Ny, h.Nz, h.size());
     printf("  粒子数 N     %d\n", h.N);
     printf("  step         %lld\n", (long long)h.step);
-    printf("  dt           %.17g\n", h.dt);
-    printf("  kT           %.17g\n", h.kT);
-    printf("  radius       %.17g\n", h.radius);
-    printf("  xi           %.17g\n", h.xi);
-    printf("  ratio_eta    %.17g\n", h.ratio_eta);
-    printf("  noise_on     %d\n", h.noise_on);
-    printf("  seed         %llu\n", (unsigned long long)h.seed);
-    printf("  rng_draws    %llu\n", (unsigned long long)h.rng_draws);
-    printf("  has_pressure %s\n", h.has_pressure() ? "是" : "否");
-
-    // 派生量：由 Common.h 的工厂算出，不从文件读
-    NS_Config ns = make_ns_config(h.Nx, h.Ny, h.Nz, h.dt, h.kT, h.noise_on != 0);
-    PhiParams pp = make_phi_params(h.radius, h.xi, h.ratio_eta);
-    printf("  --- 派生量（由 make_ns_config/make_phi_params 重算）---\n");
-    printf("  W            %.17g\n", ns.W);
-    printf("  inv_dt       %.17g\n", ns.inv_dt);
-    printf("  n_range      %d\n", pp.n_range);
-
     Holder H; H.alloc(h);
     CkptHeader h2;
     if (!load_checkpoint(path, h2, H.a, err))
@@ -213,6 +193,7 @@ static int cmd_verify_forces(const char* ckpt_path, const char* cfg_path)
     if (!load_config(cfg_path, fc, err))
     { fprintf(stderr, "错误: %s\n", err.c_str()); return 1; }
 
+    fc.Nx = h.Nx; fc.Ny = h.Ny; fc.Nz = h.Nz;
     NS_Config cfg = make_ns_config(fc);
     PotentialParams pot = make_potential_params(fc);
     WallParams wall = make_wall_params(fc);
@@ -301,24 +282,33 @@ static void print_sed_profile(const std::vector<double>& zs, int n_frames, int K
 static int cmd_sed_stats(int argc, char** argv)
 {
     std::vector<const char*> files;
+    const char* config_path = 0;
     long win_lo = -1, win_hi = -1;
     int  K = 16;
     for (int i = 2; i < argc; i++)
     {
-        if (strcmp(argv[i], "--window") == 0 && i + 2 < argc)
+        if (strcmp(argv[i], "--config") == 0 && i + 1 < argc)
+        { config_path = argv[++i]; }
+        else if (strcmp(argv[i], "--window") == 0 && i + 2 < argc)
         { win_lo = atol(argv[++i]); win_hi = atol(argv[++i]); }
         else if (strcmp(argv[i], "--bins") == 0 && i + 1 < argc) { K = atoi(argv[++i]); }
         else if (argv[i][0] == '-') { fprintf(stderr, "错误: 未知选项 %s\n", argv[i]); return 2; }
         else { files.push_back(argv[i]); }
     }
     if (files.empty()) { fprintf(stderr, "错误: --sed-stats 需要至少一个 .fpd\n"); return 2; }
+    if (!config_path) { fprintf(stderr, "错误: --sed-stats 需要 --config\n"); return 2; }
+    FpdConfig fc;
+    std::string config_err;
+    if (!load_config(config_path, fc, config_err))
+    { fprintf(stderr, "错误: %s\n", config_err.c_str()); return 2; }
     if (K < 1) { K = 1; }
 
     std::vector<SedRow> rows;
     std::vector<double> vz_series, step_series;
     std::vector<double> z_all;          // 统计窗口内累积的粒子 z
     int N_used = 0, NxNy = 0;
-    double radius = 0.0, xi = 0.0, dt = 0.0, Nz = 0.0;
+    const double radius = fc.radius, xi = fc.xi, dt = fc.dt;
+    double Nz = 0.0;
 
     for (size_t f = 0; f < files.size(); f++)
     {
@@ -334,12 +324,12 @@ static int cmd_sed_stats(int argc, char** argv)
 
         const int N = h.N;
         if (N <= 0) { continue; }
-        radius = h.radius; xi = h.xi; dt = h.dt; Nz = (double)h.Nz;
+        Nz = (double)h.Nz;
         N_used = N; NxNy = h.Nx * h.Ny;
 
         SedRow r;
         r.step = (long)h.step;
-        r.t = (double)h.step * h.dt;
+        r.t = (double)h.step * dt;
         double sz = 0.0, sv = 0.0, sv2 = 0.0;
         r.z_min = 1e300; r.z_max = -1e300;
         r.Vz_min = 1e300; r.Vz_max = -1e300;
@@ -353,8 +343,8 @@ static int cmd_sed_stats(int argc, char** argv)
             r.Vz_max = std::fmax(r.Vz_max, H.Vz[n]);
             // 壁面间隙 h = (z ± 1/2) - a —— 与 Potential.h 的 wall_gap_* 同一约定。
             // 这是「壁面势有没有托住粒子」的【唯一在线体检】。
-            const double hb = (H.Rz[n] + 0.5) - h.radius;
-            const double ht = ((double)h.Nz - 0.5 - H.Rz[n]) - h.radius;
+            const double hb = (H.Rz[n] + 0.5) - radius;
+            const double ht = ((double)h.Nz - 0.5 - H.Rz[n]) - radius;
             r.gap_min = std::fmin(r.gap_min, std::fmin(hb, ht));
         }
         r.z_cm = sz / N;

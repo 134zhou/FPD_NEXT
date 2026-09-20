@@ -21,7 +21,7 @@
 #include "Velocity.h"
 
 // ============================================================================
-// 生产路径：配置驱动 + .fpd 断点重启
+// 生产路径：配置参数 + .fpd 初态/断点重启
 //
 // 输入输出【只有】.fpd 一种格式：init 文件、检查点、重启文件都是它，
 // 文件里的 step 决定从哪继续。可视化由 tools/fpd2vtk.py 离线转换。
@@ -31,79 +31,33 @@
 // ============================================================================
 static int run_production(const FpdConfig& c)
 {
-    NS_Config cfg = make_ns_config(c);
-    PhiParams pp  = make_phi_params(c);
-
     std::string err;
-
-    // --- 决定初始状态：来自 .fpd 还是内置默认 ---
     CkptHeader h;
-    h.Nx = cfg.Nx; h.Ny = cfg.Ny; h.Nz = cfg.Nz;
-    h.N = 1; h.step = 0;
-    h.dt = c.dt; h.kT = c.kT; h.radius = c.radius; h.xi = c.xi; h.ratio_eta = c.ratio_eta;
-    h.noise_on = c.noise_on; h.seed = c.seed; h.rng_draws = 0;
+    CkptReader reader;
+    if (!open_checkpoint(c.init_file.c_str(), h, reader, err))
+    { std::cerr << "错误: " << err << "\n"; return 2; }
 
-    if (!c.init_file.empty())
-    {
-        CkptHeader fh;
-        if (!read_ckpt_header(c.init_file.c_str(), fh, err))
-        { std::cerr << "错误: " << err << "\n"; return 2; }
-
-        // 维度冲突必须报错，不静默采信任何一方
-        if (fh.Nx != cfg.Nx || fh.Ny != cfg.Ny || fh.Nz != cfg.Nz)
-        {
-            std::cerr << "错误: " << c.init_file << " 的网格是 "
-                      << fh.Nx << "x" << fh.Ny << "x" << fh.Nz
-                      << "，配置文件要求 " << cfg.Nx << "x" << cfg.Ny << "x" << cfg.Nz << "\n";
-            return 2;
-        }
-        // 旧的 z 周期存档由版本号（FPD_VERSION 1 → 2）在 read_ckpt_header 里
-        // 直接拒绝，不需要额外的标志位检查 —— 见 IOBin.h 的版本说明。
-        // 壁面不变量的【直接】检查在载入数组之后做（见下）。
-        h = fh;
-
-        // 配置里的 seed 优先 —— 否则 --set seed=... 会被 init 文件里的值静默吞掉。
-        // 逐位重启要求原运行与续跑用同一配置，因此「配置优先」正是所需语义。
-        if (h.seed != c.seed)
-        {
-            std::cout << "[注意] " << c.init_file << " 记录的 seed 是 " << h.seed
-                      << "，改用配置里的 " << c.seed << "\n";
-            h.seed = c.seed;
-        }
-    }
-
+    FpdConfig effective = c;
+    effective.Nx = h.Nx; effective.Ny = h.Ny; effective.Nz = h.Nz;
+    NS_Config cfg = make_ns_config(effective);
+    PhiParams pp  = make_phi_params(effective);
     const int size = cfg.Nx * cfg.Ny * cfg.Nz;
-    const int N    = h.N;
+    const int N = h.N;
     const long start_step = (long)h.step;
-
     if (start_step >= c.n_steps)
     {
+        close_checkpoint(reader);
         std::cout << "起始步 " << start_step << " 已达到目标 " << c.n_steps << "，无事可做\n";
         return 0;
     }
 
-    // 状态：分配 + 装配指针 + 设备映射 + plan/gen。ST_FULL = 生产全套。
-    // 映射用运行时 API（见 State.h），RNG 统一 Philox（见 State.cpp）。
     FpdState st;
-    st.init(cfg, N, ST_FULL, h.seed);
-
+    st.init(cfg, N, ST_FULL, c.seed);
     CkptArrays arr = st.ckpt_arrays();
-
-    if (!c.init_file.empty())
-    {
-        CkptHeader tmp;
-        if (!load_checkpoint(c.init_file.c_str(), tmp, arr, err))
-        { std::cerr << "错误: " << err << "\n"; st.finish(); return 2; }
-        std::cout << "从 " << c.init_file << " 载入（step=" << h.step
-                  << "，N=" << N << "，rng_draws=" << h.rng_draws << "）\n";
-    }
-    else
-    {
-        // 内置默认：单粒子放盒心的一般亚格点位置
-        st.Rx[0] = cfg.Nx / 2.0 + 0.3; st.Ry[0] = cfg.Ny / 2.0 + 0.7; st.Rz[0] = cfg.Nz / 2.0 + 0.5;
-        st.Rux[0] = st.Rx[0]; st.Ruy[0] = st.Ry[0]; st.Ruz[0] = st.Rz[0];
-        std::cout << "未指定 init_file，使用内置默认（单粒子放盒心）\n";
-    }
+    if (!read_checkpoint(reader, h, arr, err))
+    { std::cerr << "错误: " << err << "\n"; st.finish(); return 2; }
+    std::cout << "从 " << c.init_file << " 载入（step=" << h.step
+              << "，N=" << N << "）\n";
 
     // 壁面不变量【直接】检查：上壁那一层 vz 必须逐位为 0。
     //
@@ -124,7 +78,7 @@ static int run_production(const FpdConfig& c)
         }
         if (nbad > 0)
         {
-            std::cerr << "错误: " << (c.init_file.empty() ? std::string("内置默认初态") : c.init_file)
+            std::cerr << "错误: " << c.init_file
                       << " 的 vz[:,:," << cfg.Nz - 1 << "] 有 " << nbad
                       << " 个非零值。上壁法向速度必须恒 0，否则破坏泊松的相容性条件。\n";
             st.finish();
@@ -132,7 +86,7 @@ static int run_production(const FpdConfig& c)
         }
     }
 
-    // st.init 在 load 之前 copyin 了初始 0；现在主机端有 load/默认 的值，推上去
+    // st.init 在载入前映射了初始 0；现在把文件数组上传到设备
     st.upload(ST_PARTICLE | ST_VELOCITY);
 
     // 粒子间势、壁面势与外场
@@ -183,13 +137,7 @@ static int run_production(const FpdConfig& c)
         {
             CkptHeader oh = h;
             oh.step = step;
-            // 仅供人读：实际使用的 offset 由 step 直接算出，读回时不采信此值
-            oh.rng_draws = 2ULL * (unsigned long long)step
-                         * 3ULL * (unsigned long long)h.size();
-            oh.flags = (c.save_pressure ? FPD_FLAG_PRESSURE : 0u);
-
             CkptArrays oa = st.ckpt_arrays();
-            if (!c.save_pressure) { oa.p = 0; }
 
             const std::string path = ckpt_path(c.out_dir, c.run_name, step);
             std::string e2;
@@ -202,9 +150,7 @@ static int run_production(const FpdConfig& c)
 
     // 粒子越界检查。只在已经 download 过 ST_PARTICLE 的地方调用 ——
     // 不做每步的 device→host 同步（那会把 GPU 流水线打断）。
-    // ⚠️ 代价是检测延迟到下一个检查点/日志间隔。壁面势会把粒子在碰到壁之前弹回，
-    //    所以这个检查正常情况下是纯保险 —— 但保险必须留着：壁面势配软了（残余力比
-    //    报警那条）就压不住，重力会把粒子按穿，那时这里必须中止而不是继续跑。
+    // 检测延迟到下一个检查点/日志间隔；穿墙时中止。
     // ⚠️ 壁面势开启时，合法区间【收紧】到「粒子表面不越过壁面」：z ∈ [-1/2+a, Nz-1/2-a]。
     //    这不是洁癖。壁面势的自变量是间隙 h，而 pair_force_over_r 对负自变量
     //    会给出【符号反向】的力（h<0 时 h² 仍为正，力把粒子往壁里推）——
@@ -244,14 +190,14 @@ static int run_production(const FpdConfig& c)
         {
             // 拉全检查点需要的数组（含 Fx/Fy/Fz —— 原来漏过，力恒 0 时无害，
             // 加粒子间力后会写出陈旧主机端零值；现在一步拉全，不再有遗漏）
-            st.download(ST_VELOCITY | ST_PARTICLE);
+            st.download(ST_VELOCITY | ST_PARTICLE, false);
             if (check_wall_bounds(step)) { writer.write(step); rc = 3; break; }
             if (!writer.write(step)) { rc = 2; break; }
         }
 
         if (step % c.interval_log == 0)
         {
-            st.download(ST_VELOCITY | ST_PARTICLE);
+            st.download(ST_VELOCITY | ST_PARTICLE, false);
             bool bad = false;
             for (int i = 0; i < size; i++)
             { if (!std::isfinite(st.vx[i])) { bad = true; break; } }
@@ -303,7 +249,7 @@ static int run_production(const FpdConfig& c)
         // 补算一次，保证「文件里的 F 对应文件里的 R」。
         compute_particle_forces(cfg, pot, ext, wall, N, st.Rx, st.Ry, st.Rz,
                                 st.Fx, st.Fy, st.Fz);
-        st.download(ST_VELOCITY | ST_PARTICLE);
+        st.download(ST_VELOCITY | ST_PARTICLE, false);
         if (!writer.write(c.n_steps)) { rc = 2; }
     }
 

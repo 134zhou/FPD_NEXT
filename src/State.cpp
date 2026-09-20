@@ -189,7 +189,7 @@ void FpdState::require(unsigned bits, const char* who) const
 CkptArrays FpdState::ckpt_arrays() const
 {
     CkptArrays a;
-    a.vx = vx; a.vy = vy; a.vz = vz; a.p = p;
+    a.vx = vx; a.vy = vy; a.vz = vz;
     a.Rx = Rx; a.Ry = Ry; a.Rz = Rz;
     a.Rux = Rux; a.Ruy = Ruy; a.Ruz = Ruz;
     a.Vx = Vx; a.Vy = Vy; a.Vz = Vz;
@@ -197,7 +197,7 @@ CkptArrays FpdState::ckpt_arrays() const
     return a;
 }
 
-void FpdState::download(unsigned bits)
+void FpdState::download(unsigned bits, bool pressure)
 {
     const size_t nbN    = (size_t)nalloc * sizeof(double);
     const size_t nbSize = size * sizeof(double);
@@ -218,7 +218,8 @@ void FpdState::download(unsigned bits)
     }
     if (bits & ST_VELOCITY)
     {
-        api_down(vx, nbSize); api_down(vy, nbSize); api_down(vz, nbSize); api_down(p, nbSize);
+        api_down(vx, nbSize); api_down(vy, nbSize); api_down(vz, nbSize);
+        if (pressure) { api_down(p, nbSize); }
     }
     // ST_SOLVER 的临时场不下载（仅供 step_navier_stokes 内部使用）；
     // 例外是 diag：它是壁面相容性诊断量，生产运行要定期读回监控（判据 W8）。

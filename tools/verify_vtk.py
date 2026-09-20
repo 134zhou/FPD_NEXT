@@ -2,12 +2,13 @@
 """
 往返校验：用 ParaView 读回转换产物，与源 .fpd 逐点比对。
 
-  $PV/bin/pvpython tools/verify_vtk.py vis/A.pvd out/A_0000005.fpd
+  $PV/bin/pvpython tools/verify_vtk.py vis/A.pvd out/A_0000005.fpd --config config/smoke.cfg
 
 这比「检查 XML 是否合法」强得多 —— 它验证的是 ParaView 实际看到的数值
 与模拟真正写出的数值一致，且插值方向、轴序、时间轴都对。
 """
 
+import argparse
 import os
 import sys
 
@@ -16,19 +17,24 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fpd_format as F
 import fpd2vtk
+from fpd_config import read_values
 
 
 def main():
-    if len(sys.argv) < 3:
-        sys.exit("用法: verify_vtk.py <run.pvd> <对应某一步的 .fpd>")
-    pvd, fpd = sys.argv[1], sys.argv[2]
+    ap = argparse.ArgumentParser(description="验证 .pvd 与对应 .fpd 的数组和时间轴")
+    ap.add_argument("pvd")
+    ap.add_argument("fpd")
+    ap.add_argument("--config", required=True)
+    args = ap.parse_args()
+    pvd, fpd = args.pvd, args.fpd
 
     from paraview.simple import OpenDataFile, UpdatePipeline
     from paraview import servermanager as sm
 
     header = F.read_header(fpd)
     Nx, Ny, Nz = header["Nx"], header["Ny"], header["Nz"]
-    step, dt = header["step"], header["dt"]
+    step = header["step"]
+    dt = read_values(args.config, ("dt",))["dt"]
     t_want = step * dt
 
     src = OpenDataFile(pvd)
@@ -58,8 +64,6 @@ def main():
 
     # --- 源数据 ---
     want = ["vx", "vy", "vz", "Rx", "Ry", "Rz", "Vx", "Vy", "Vz", "Rux", "Ruy", "Ruz"]
-    if header["flags"] & F.FLAG_PRESSURE:
-        want.append("p")
     arrs = fpd2vtk.read_arrays(fpd, header, want)
 
     from vtk.util import numpy_support as ns
@@ -74,13 +78,6 @@ def main():
     print("velocity: %d 个格子  最大相对差 %.3e  %s"
           % (vel.shape[0], rel, "[PASS]" if rel < 1e-6 else "[FAIL]"))
     ok &= (rel < 1e-6)
-
-    if header["flags"] & F.FLAG_PRESSURE:
-        pr = ns.vtk_to_numpy(fluid.GetCellData().GetArray("pressure"))
-        rp = arrs["p"].astype(np.float32)
-        d = np.max(np.abs(pr - rp)) / max(1e-30, float(np.max(np.abs(rp))))
-        print("pressure: 最大相对差 %.3e  %s" % (d, "[PASS]" if d < 1e-6 else "[FAIL]"))
-        ok &= (d < 1e-6)
 
     # --- 粒子 ---
     N = header["N"]

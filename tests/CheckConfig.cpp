@@ -14,7 +14,7 @@ int run_config_check()
     if (fd < 0) { std::perror("mkstemp"); return 1; }
     close(fd);
     const std::string base =
-        "Nx=32\nNy=32\nNz=32\ndt=0.002\nn_steps=200\n"
+        "init_file=test.fpd\ndt=0.002\nn_steps=200\n"
         "kT=0.25\nradius=3.2\nxi=1\nratio_eta=50\n";
     std::string err;
     int fails = 0;
@@ -39,10 +39,11 @@ int run_config_check()
     };
 
     FpdConfig c;
-    check(!load(base.substr(base.find('\n') + 1), c) && err.find("Nx") != std::string::npos,
-          "基础必填项缺失报错");
-    check(load(base + "Nx=48\n", c) && c.Nx == 48 &&
-          apply_override(c, "Nx=64", err) && c.Nx == 64,
+    check(load(base.substr(base.find('\n') + 1), c) && !validate_config(c, err) &&
+          err.find("init_file") != std::string::npos,
+          "init_file 缺失报错");
+    check(load(base + "dt=0.003\n", c) && c.dt == 0.003 &&
+          apply_override(c, "dt=0.004", err) && c.dt == 0.004,
           "重复键最后生效，--set 最后覆盖");
     check(!load(base + "radius_typo=3\n", c) && err.find("未知") != std::string::npos &&
           err.find("你是不是") == std::string::npos, "未知键报错且无拼写建议");
@@ -56,8 +57,17 @@ int run_config_check()
     check(load(base + "pot_eps=10\nwall_alpha=1\n", c) && validate_config(c, err),
           "未使用的已知势参数允许存在");
     // 只测试配置层接受，不把不适合模拟的参数送入求解器。
-    check(load(base + "dt=-1\nNx=1\nratio_eta=0\n", c) && validate_config(c, err),
+    check(load(base + "dt=-1\nratio_eta=0\n", c) && validate_config(c, err),
           "数值范围由使用者负责");
+
+    for (const char* key : {"Nx", "Ny", "Nz"})
+    {
+        const std::string kv = std::string(key) + "=32";
+        check(load(base + kv + "\n", c) && !validate_config(c, err),
+              (kv + " 在配置文件中被拒绝").c_str());
+        check(load(base, c) && apply_override(c, kv.c_str(), err) &&
+              !validate_config(c, err), (kv + " 在 --set 中被拒绝").c_str());
+    }
 
     const char* models[] = {"none", "wca", "morse", "lj126"};
     const char* params[][4] = {

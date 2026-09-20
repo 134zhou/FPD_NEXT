@@ -11,9 +11,9 @@
 std::vector<FieldDesc> config_fields(FpdConfig& c)
 {
     return {
-        {"Nx",             F_INT,    &c.Nx,             true,  "网格 x 方向格子数"},
-        {"Ny",             F_INT,    &c.Ny,             true,  "网格 y 方向格子数"},
-        {"Nz",             F_INT,    &c.Nz,             true,  "网格 z 方向格子数"},
+        {"Nx",             F_INT,    &c.Nx,             false, "网格 x 方向格子数（由 init_file 提供，输入时拒绝）"},
+        {"Ny",             F_INT,    &c.Ny,             false, "网格 y 方向格子数（由 init_file 提供，输入时拒绝）"},
+        {"Nz",             F_INT,    &c.Nz,             false, "网格 z 方向格子数（由 init_file 提供，输入时拒绝）"},
         {"dt",             F_DOUBLE, &c.dt,             true,  "时间步长"},
         {"n_steps",        F_LONG,   &c.n_steps,        true,  "绝对目标步数（不是增量）"},
         {"kT",             F_DOUBLE, &c.kT,             true,  "温度 k_B T"},
@@ -49,7 +49,6 @@ std::vector<FieldDesc> config_fields(FpdConfig& c)
         {"run_name",       F_STRING, &c.run_name,       false, "输出文件名前缀"},
         {"interval_ckpt",  F_LONG,   &c.interval_ckpt,  false, "每多少步写一个 .fpd"},
         {"interval_log",   F_LONG,   &c.interval_log,   false, "每多少步打印一行进度"},
-        {"save_pressure",  F_INT,    &c.save_pressure,  false, "0/1，把 p 存进 .fpd 供可视化"},
         {"seed",           F_ULL,    &c.seed,           false, "随机数种子"},
     };
 }
@@ -137,7 +136,6 @@ bool load_config(const char* path, FpdConfig& c, std::string& err)
     }
 
     std::vector<FieldDesc> tab = config_fields(c);
-    std::vector<bool> seen(tab.size(), false);
 
     std::string line;
     int lineno = 0;
@@ -168,24 +166,7 @@ bool load_config(const char* path, FpdConfig& c, std::string& err)
             err = std::string(path) + ":" + std::to_string(lineno) + " " + err;
             return false;
         }
-        seen[hit] = true;
         c.keys_given.push_back(key);
-    }
-
-    // 必填项缺失也必须报错 —— 不给默认值兜底
-    std::string missing;
-    for (size_t i = 0; i < tab.size(); i++)
-    {
-        if (tab[i].required && !seen[i])
-        {
-            missing += (missing.empty() ? "" : ", ");
-            missing += tab[i].key;
-        }
-    }
-    if (!missing.empty())
-    {
-        err = std::string("配置文件缺少必填项: ") + missing;
-        return false;
     }
 
     return true;
@@ -218,6 +199,18 @@ static bool was_given(const std::vector<std::string>& keys, const std::string& k
 // 只检查势名称和必填参数；数值范围、截断与稳定性由使用者保证。
 bool validate_config(const FpdConfig& c, std::string& err)
 {
+    if (c.init_file.empty()) { err = "必须提供 init_file"; return false; }
+    for (const char* key : {"Nx", "Ny", "Nz"})
+    {
+        if (was_given(c.keys_given, key))
+        { err = std::string("网格尺寸由 init_file 提供，不允许设置 ") + key; return false; }
+    }
+    FpdConfig tmp = c;
+    for (const FieldDesc& f : config_fields(tmp))
+    {
+        if (f.required && !was_given(c.keys_given, f.key))
+        { err = std::string("缺少必填项 ") + f.key; return false; }
+    }
     struct PotFamily
     {
         const char* prefix;        // "pot_" / "wall_"
@@ -288,6 +281,9 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
     ofs << "# 本次运行实际使用的配置（自动生成，可直接作为输入重跑）\n";
     for (size_t i = 0; i < tab.size(); i++)
     {
+        if (std::strcmp(tab[i].key, "Nx") == 0 ||
+            std::strcmp(tab[i].key, "Ny") == 0 ||
+            std::strcmp(tab[i].key, "Nz") == 0) { continue; }
         ofs << tab[i].key << " = ";
         switch (tab[i].type)
         {

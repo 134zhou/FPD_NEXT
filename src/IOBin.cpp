@@ -65,12 +65,9 @@ struct Reader
 
 // header 的字段顺序在写和读之间必须严格一致，所以用同一个宏展开两次
 #define FPD_HEADER_FIELDS(OP, h)  \
-    OP(h.version);   OP(h.flags);                                   \
+    OP(h.version);                                                \
     OP(h.Nx); OP(h.Ny); OP(h.Nz); OP(h.N);                          \
-    OP(h.step);                                                     \
-    OP(h.dt); OP(h.kT); OP(h.radius); OP(h.xi); OP(h.ratio_eta);    \
-    OP(h.noise_on);                                                 \
-    OP(h.seed); OP(h.rng_draws);
+    OP(h.step);
 
 std::string ckpt_path(const std::string& out_dir, const std::string& run_name, long step)
 {
@@ -101,8 +98,6 @@ bool save_checkpoint(const char* path, const CkptHeader& h_in,
                      const CkptArrays& a, std::string& err)
 {
     CkptHeader h = h_in;
-    // p 为空就不要置标志位，否则读端会去读不存在的块
-    if (a.p == 0) { h.flags &= ~FPD_FLAG_PRESSURE; }
 
     FILE* f = fopen(path, "wb");
     if (!f) { err = std::string("无法写入 ") + path; return false; }
@@ -122,7 +117,6 @@ bool save_checkpoint(const char* path, const CkptHeader& h_in,
     const size_t N    = (size_t)h.N;
 
     w.arr(a.vx, size); w.arr(a.vy, size); w.arr(a.vz, size);
-    if (h.has_pressure()) { w.arr(a.p, size); }
 
     w.arr(a.Rx, N);  w.arr(a.Ry, N);  w.arr(a.Rz, N);
     w.arr(a.Rux, N); w.arr(a.Ruy, N); w.arr(a.Ruz, N);
@@ -191,37 +185,38 @@ static FILE* open_and_read_header(const char* path, CkptHeader& h,
     return f;
 }
 
-bool read_ckpt_header(const char* path, CkptHeader& h, std::string& err)
+bool open_checkpoint(const char* path, CkptHeader& h, CkptReader& ctx, std::string& err)
 {
     Reader r;
     FILE* f = open_and_read_header(path, h, r, err);
     if (!f) { return false; }
-    fclose(f);
+    ctx.f = f;
+    ctx.hash = r.hash.h;
     return true;
 }
 
-bool load_checkpoint(const char* path, CkptHeader& h,
+void close_checkpoint(CkptReader& ctx)
+{
+    if (ctx.f) { fclose((FILE*)ctx.f); ctx.f = 0; }
+}
+
+bool read_ckpt_header(const char* path, CkptHeader& h, std::string& err)
+{
+    CkptReader ctx;
+    if (!open_checkpoint(path, h, ctx, err)) { return false; }
+    close_checkpoint(ctx);
+    return true;
+}
+
+bool read_checkpoint(CkptReader& ctx, const CkptHeader& h,
                      const CkptArrays& a, std::string& err)
 {
-    Reader r;
-    FILE* f = open_and_read_header(path, h, r, err);
-    if (!f) { return false; }
-
+    FILE* f = (FILE*)ctx.f;
+    Reader r; r.f = f; r.hash.h = ctx.hash;
     const size_t size = h.size();
     const size_t N    = (size_t)h.N;
 
     r.arr(a.vx, size); r.arr(a.vy, size); r.arr(a.vz, size);
-    if (h.has_pressure())
-    {
-        if (a.p) { r.arr(a.p, size); }
-        else
-        {
-            // 调用方不要压力：照样读过去以保证哈希覆盖一致
-            std::vector<double> skip(size);
-            r.arr(skip.data(), size);
-        }
-    }
-
     r.arr(a.Rx, N);  r.arr(a.Ry, N);  r.arr(a.Rz, N);
     r.arr(a.Rux, N); r.arr(a.Ruy, N); r.arr(a.Ruz, N);
     r.arr(a.Vx, N);  r.arr(a.Vy, N);  r.arr(a.Vz, N);
@@ -229,27 +224,33 @@ bool load_checkpoint(const char* path, CkptHeader& h,
 
     if (!r.ok)
     {
-        err = std::string(path) + " 数据区被截断";
-        fclose(f); return false;
+        err = "检查点数据区被截断";
+        close_checkpoint(ctx); return false;
     }
 
     uint64_t want = 0;
     const bool got = (fread(&want, 1, 8, f) == 8);
-    // 文件应当恰好到此为止
     char extra;
     const bool trailing = (fread(&extra, 1, 1, f) == 1);
-    fclose(f);
+    close_checkpoint(ctx);
 
-    if (!got)     { err = std::string(path) + " 缺少尾部校验和"; return false; }
-    if (trailing) { err = std::string(path) + " 尾部有多余数据"; return false; }
-
+    if (!got)     { err = "检查点缺少尾部校验和"; return false; }
+    if (trailing) { err = "检查点尾部有多余数据"; return false; }
     if (want != r.hash.h)
     {
         std::ostringstream o;
-        o << path << " 校验和不匹配（文件损坏或被截断）：期望 0x" << std::hex << want
+        o << "检查点校验和不匹配：期望 0x" << std::hex << want
           << "，实际 0x" << r.hash.h;
         err = o.str();
         return false;
     }
     return true;
+}
+
+bool load_checkpoint(const char* path, CkptHeader& h,
+                     const CkptArrays& a, std::string& err)
+{
+    CkptReader ctx;
+    if (!open_checkpoint(path, h, ctx, err)) { return false; }
+    return read_checkpoint(ctx, h, a, err);
 }
