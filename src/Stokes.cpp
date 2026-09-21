@@ -25,8 +25,6 @@ void step_navier_stokes
     int size = Nx * Ny * Nz;
     double DT = cfg.dt;
     const int esize = wz_edge_size(cfg);   // 棱边数组元素数（Nz+1 层，见 Wall.h）
-    // 对流开关：生产恒为 1。乘 1.0 是精确运算，所以默认路径逐位不变。
-    const double ADV = (double)cfg.adv_on;
 
     // --- 1. 生成随机噪声 (Σ 项) ---
     // randD: 0,1,2 对应 xx, yy, zz 方向（体心，size 个）；randN: 0,1,2 对应 xy, yz, zx
@@ -38,9 +36,7 @@ void step_navier_stokes
     const unsigned long long slotN = wz_rand_slot_n(cfg);
     const unsigned long long base  = (unsigned long long)step * (slotD + slotN);
 
-    // noise_skip=1 时跳过生成，直接用 randD/randN 的现值 —— 供 FDT 判据逐个注入
-    // 单位噪声向量（判据专用，生产路径恒为 0，且此时算术表达式逐位不变）。
-    if (!cfg.noise_skip)
+    // 每一步按绝对 step 重新定位，保证连续运行与重启使用同一段随机数流。
     {
         #pragma acc host_data use_device(randD, randN)
         {
@@ -51,82 +47,113 @@ void step_navier_stokes
         }
     }
 
-    // --- 2. 计算总动量通量 Π = Advection - Viscosity - Noise ---
-    // 逻辑 k 统一遍历：体心量在 k ∈ [0,Nz-1]；棱边量 Π_yz/Π_zx 在 k ∈ [-1,Nz-1]
-    // （多出 k=-1 这一层 = 下壁棱边，上壁棱边在 k=Nz-1）。
-    #pragma acc parallel loop collapse(3) present(vx, vy, vz, eta, etaXY, etaYZ, etaZX, randD, randN, pi_dx, pi_dy, pi_dz, pi_nx, pi_ny, pi_nz)
+    // --- 2a. 体心与 XY 棱：k ∈ [0, Nz-1] ---
+    #pragma acc parallel loop collapse(3) present(vx, vy, vz, eta, etaXY, randD, randN, pi_dx, pi_dy, pi_dz, pi_nz)
     for (int i = 0; i < Nx; i++)
     {
         for (int j = 0; j < Ny; j++)
         {
-            for (int kk = 0; kk < Nz + 1; kk++)
+            for (int k = 0; k < Nz; k++)
             {
-                const int k = kk - 1;
                 int ip = (i + 1) % Nx; int im = (i - 1 + Nx) % Nx;
                 int jp = (j + 1) % Ny; int jm = (j - 1 + Ny) % Ny;
 
-                // ---------------- 体心量：仅 k ∈ [0, Nz-1] ----------------
                 // ⚠️ z 向邻居用 (k-1+Nz)%Nz 是【承重的壁面代码，不是周期残留】：
                 //    k=0 时读到 vz[Nz-1]，而那个元素被下面 3a 段钉死为 0 —— 正是
                 //    下壁 vz[-1]=0 所需的 ghost。所以这两处【一行都不用改】，
                 //    也不许「修」成 k-1（会越界）。
-                if (k >= 0)
-                {
-                    const int kp = (k + 1) % Nz; const int km = (k - 1 + Nz) % Nz;   // kp 未被引用，见 3a
-                    const int ijk = IDX(i, j, k);
+                const int km = (k - 1 + Nz) % Nz;
+                const int ijk = IDX(i, j, k);
 
-                    // --- 正应力分量 (Diagonal terms: Πxx, Πyy, Πzz) ---
-                    // 物理位置：Cell Center (i,j,k)
-                    double vax = (vx[ijk] + vx[IDX(im, j, k)]) * 0.5;
-                    double vay = (vy[ijk] + vy[IDX(i, jm, k)]) * 0.5;
-                    double vaz = (vz[ijk] + vz[IDX(i, j, km)]) * 0.5;
+                // 正应力分量：体心 (i,j,k)
+                double vax = (vx[ijk] + vx[IDX(im, j, k)]) * 0.5;
+                double vay = (vy[ijk] + vy[IDX(i, jm, k)]) * 0.5;
+                double vaz = (vz[ijk] + vz[IDX(i, j, km)]) * 0.5;
 
-                    pi_dx[ijk] = ADV * vax * vax; // Advection: v_i * v_j
-                    pi_dx[ijk] -= eta[ijk] * 2.0 * (vx[ijk] - vx[IDX(im, j, k)]); // Viscosity: 2*eta*Exx
-                    pi_dx[ijk] -= sqrt(2.0 * eta[ijk]) * cfg.W * randD[0 * size + ijk]; // Noise: Σxx
+                pi_dx[ijk] = vax * vax;
+                pi_dx[ijk] -= eta[ijk] * 2.0 * (vx[ijk] - vx[IDX(im, j, k)]);
+                pi_dx[ijk] -= sqrt(2.0 * eta[ijk]) * cfg.W * randD[0 * size + ijk];
 
-                    pi_dy[ijk] = ADV * vay * vay;
-                    pi_dy[ijk] -= eta[ijk] * 2.0 * (vy[ijk] - vy[IDX(i, jm, k)]);
-                    pi_dy[ijk] -= sqrt(2.0 * eta[ijk]) * cfg.W * randD[1 * size + ijk];
+                pi_dy[ijk] = vay * vay;
+                pi_dy[ijk] -= eta[ijk] * 2.0 * (vy[ijk] - vy[IDX(i, jm, k)]);
+                pi_dy[ijk] -= sqrt(2.0 * eta[ijk]) * cfg.W * randD[1 * size + ijk];
 
-                    pi_dz[ijk] = ADV * vaz * vaz;
-                    pi_dz[ijk] -= eta[ijk] * 2.0 * (vz[ijk] - vz[IDX(i, j, km)]);
-                    pi_dz[ijk] -= sqrt(2.0 * eta[ijk]) * cfg.W * randD[2 * size + ijk];
+                pi_dz[ijk] = vaz * vaz;
+                pi_dz[ijk] -= eta[ijk] * 2.0 * (vz[ijk] - vz[IDX(i, j, km)]);
+                pi_dz[ijk] -= sqrt(2.0 * eta[ijk]) * cfg.W * randD[2 * size + ijk];
 
-                    // Πxy (pi_nz): 位于 XY 面的棱边（体心层，不含 z 导数，控制体完整）
-                    double vsx_y = (vx[ijk] + vx[IDX(i, jp, k)]) * 0.5;
-                    double vsy_x = (vy[ijk] + vy[IDX(ip, j, k)]) * 0.5;
-                    pi_nz[ijk] = ADV * vsx_y * vsy_x; // 对流
-                    pi_nz[ijk] -= etaXY[ijk] * ((vx[IDX(i, jp, k)] - vx[ijk]) + (vy[IDX(ip, j, k)] - vy[ijk])); // 粘性
-                    pi_nz[ijk] -= sqrt(etaXY[ijk]) * cfg.W * randN[0 * esize + ijk]; // 随机
-                }
-
-                // ---------------- 棱边量：k ∈ [-1, Nz-1] ----------------
-                // 这两个量在 z 方向【没有】回绕（不环绕到另一片壁），
-                // 所以要用 wz_edge_idx 的逻辑索引 + wz_vx/wz_vy/wz_vz 的 ghost 取值。
-                // 代入 ghost 后表达式不变就自动给出正确结果：
-                //   k=-1（下壁）对流两个因子都是 0；粘性 (vx[0]-vx[-1]) = 2vx[0]。
-                const int eb  = wz_edge_idx(cfg, i,  j,  k);
-                const int ebp = wz_edge_idx(cfg, ip, j,  k);
-                const int ebj = wz_edge_idx(cfg, i,  jp, k);
-                const double gam = wz_noise_gamma(cfg, k);   // 壁面棱边 = 2（幅度 ×√2）
-
-                // Πyz (pi_nx): 位于 YZ 面的棱边
-                double vsy_z = (wz_vy(cfg, vy, i, j, k) + wz_vy(cfg, vy, i, j, k + 1)) * 0.5;
-                double vsz_y = (wz_vz(cfg, vz, i, j, k) + wz_vz(cfg, vz, i, jp, k)) * 0.5;
-                pi_nx[eb] = ADV * vsy_z * vsz_y; // 对流
-                pi_nx[eb] -= etaYZ[eb] * ((wz_vy(cfg, vy, i, j, k + 1) - wz_vy(cfg, vy, i, j, k))
-                                        + (wz_vz(cfg, vz, i, jp, k) - wz_vz(cfg, vz, i, j, k))); // 粘性
-                pi_nx[eb] -= sqrt(etaYZ[eb] * gam) * cfg.W * randN[1 * esize + eb]; // 随机
-
-                // Πzx (pi_ny): 位于 ZX 面的棱边
-                double vsz_x = (wz_vz(cfg, vz, i, j, k) + wz_vz(cfg, vz, ip, j, k)) * 0.5;
-                double vsx_z = (wz_vx(cfg, vx, i, j, k) + wz_vx(cfg, vx, i, j, k + 1)) * 0.5;
-                pi_ny[eb] = ADV * vsz_x * vsx_z; // 对流
-                pi_ny[eb] -= etaZX[eb] * ((wz_vz(cfg, vz, ip, j, k) - wz_vz(cfg, vz, i, j, k))
-                                        + (wz_vx(cfg, vx, i, j, k + 1) - wz_vx(cfg, vx, i, j, k))); // 粘性
-                pi_ny[eb] -= sqrt(etaZX[eb] * gam) * cfg.W * randN[2 * esize + eb]; // 随机
+                // Πxy (pi_nz)：XY 棱 (i+1/2,j+1/2,k)
+                double vsx_y = (vx[ijk] + vx[IDX(i, jp, k)]) * 0.5;
+                double vsy_x = (vy[ijk] + vy[IDX(ip, j, k)]) * 0.5;
+                pi_nz[ijk] = vsx_y * vsy_x;
+                pi_nz[ijk] -= etaXY[ijk] * ((vx[IDX(i, jp, k)] - vx[ijk])
+                                           + (vy[IDX(ip, j, k)] - vy[ijk]));
+                pi_nz[ijk] -= sqrt(etaXY[ijk]) * cfg.W * randN[0 * esize + ijk];
             }
+        }
+    }
+
+    // --- 2b. 内部 YZ/ZX 棱：k ∈ [0, Nz-2] ---
+    // 这一段不触及 ghost，所有速度都能用普通 IDX 直接访问，噪声控制体完整（γ=1）。
+    #pragma acc parallel loop collapse(3) present(vx, vy, vz, etaYZ, etaZX, randN, pi_nx, pi_ny)
+    for (int i = 0; i < Nx; i++)
+    {
+        for (int j = 0; j < Ny; j++)
+        {
+            for (int k = 0; k < Nz - 1; k++)
+            {
+                int ip = (i + 1) % Nx;
+                int jp = (j + 1) % Ny;
+                const int ijk = IDX(i, j, k);
+                const int eb  = wz_edge_idx(cfg, i,  j,  k);
+
+                // Πyz (pi_nx)：YZ 棱 (i,j+1/2,k+1/2)
+                double vsy_z = (vy[ijk] + vy[IDX(i, j, k + 1)]) * 0.5;
+                double vsz_y = (vz[ijk] + vz[IDX(i, jp, k)]) * 0.5;
+                pi_nx[eb] = vsy_z * vsz_y;
+                pi_nx[eb] -= etaYZ[eb] * ((vy[IDX(i, j, k + 1)] - vy[ijk])
+                                        + (vz[IDX(i, jp, k)] - vz[ijk]));
+                pi_nx[eb] -= sqrt(etaYZ[eb]) * cfg.W * randN[1 * esize + eb];
+
+                // Πzx (pi_ny)：ZX 棱 (i+1/2,j,k+1/2)
+                double vsz_x = (vz[ijk] + vz[IDX(ip, j, k)]) * 0.5;
+                double vsx_z = (vx[ijk] + vx[IDX(i, j, k + 1)]) * 0.5;
+                pi_ny[eb] = vsz_x * vsx_z;
+                pi_ny[eb] -= etaZX[eb] * ((vz[IDX(ip, j, k)] - vz[ijk])
+                                        + (vx[IDX(i, j, k + 1)] - vx[ijk]));
+                pi_ny[eb] -= sqrt(etaZX[eb]) * cfg.W * randN[2 * esize + eb];
+            }
+        }
+    }
+
+    // --- 2c. 两片壁面的 YZ/ZX 棱：k=-1 与 k=Nz-1 ---
+    // 无滑移 ghost：vα[-1]=-vα[0]，vα[Nz]=-vα[Nz-1]（α=x,y），法向 vz=0。
+    // 代入一般式后，两侧对流与横向 vz 导数都为 0；半格单侧导数分别为
+    // +2vα[0] 与 -2vα[Nz-1]。壁面控制体只有一半，故 γ=2（幅度 ×√2）。
+    const double wall_gamma = cfg.noise_gamma1 ? 1.0 : 2.0;
+    #pragma acc parallel loop collapse(2) present(vx, vy, etaYZ, etaZX, randN, pi_nx, pi_ny)
+    for (int i = 0; i < Nx; i++)
+    {
+        for (int j = 0; j < Ny; j++)
+        {
+            const int bottom = IDX(i, j, 0);
+            const int top = IDX(i, j, Nz - 1);
+            const int eb_bottom = wz_edge_idx(cfg, i, j, -1);
+            const int eb_top = wz_edge_idx(cfg, i, j, Nz - 1);
+
+            pi_nx[eb_bottom] = -etaYZ[eb_bottom] * (2.0 * vy[bottom]);
+            pi_nx[eb_bottom] -= sqrt(etaYZ[eb_bottom] * wall_gamma) * cfg.W
+                              * randN[1 * esize + eb_bottom];
+            pi_nx[eb_top] = -etaYZ[eb_top] * (-2.0 * vy[top]);
+            pi_nx[eb_top] -= sqrt(etaYZ[eb_top] * wall_gamma) * cfg.W
+                           * randN[1 * esize + eb_top];
+
+            pi_ny[eb_bottom] = -etaZX[eb_bottom] * (2.0 * vx[bottom]);
+            pi_ny[eb_bottom] -= sqrt(etaZX[eb_bottom] * wall_gamma) * cfg.W
+                              * randN[2 * esize + eb_bottom];
+            pi_ny[eb_top] = -etaZX[eb_top] * (-2.0 * vx[top]);
+            pi_ny[eb_top] -= sqrt(etaZX[eb_top] * wall_gamma) * cfg.W
+                           * randN[2 * esize + eb_top];
         }
     }
 
@@ -144,7 +171,7 @@ void step_navier_stokes
                 int ijk = IDX(i, j, k);
                 int ip = (i + 1) % Nx; int im = (i - 1 + Nx) % Nx;
                 int jp = (j + 1) % Ny; int jm = (j - 1 + Ny) % Ny;
-                int kp = (k + 1) % Nz; int km = (k - 1 + Nz) % Nz;
+                int kp = (k + 1) % Nz;
 
                 // 棱边量的 z 向邻居走逻辑索引：k=0 的下面那层是【下壁】（逻辑 k=-1），
                 // 不是回绕过来的上壁。搞错会静默用错壁面剪切。

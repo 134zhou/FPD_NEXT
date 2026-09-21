@@ -1,13 +1,14 @@
 # 进度记录
 
-最后更新：2026-09-14（Phase 6 进行中：粒子-壁面排斥势 + 集体沉降算例）
+最后更新：2026-09-22（Stokes 应力按离散定义域拆分）
 
 ## 一句话状态
 
 流体求解器、交错网格封装、配置系统与断点重启均已验证；
 **粒子间相互作用力（WCA/Morse/LJ126 + 外场）已实现并通过数值判据**；
 自检拆成独立可执行 `fpd_check`，`FpdState` 消除了 4 份分配/映射样板；
-**z 向无滑移壁面（Phase 7）已完成并接线到生产路径**，端到端判据 W1–W7 全绿。
+**z 向无滑移壁面（Phase 7）已完成并接线到生产路径**。应力装配现按体心、内部 z 棱、
+两片壁面拆成三个 kernel；本轮 GPU 复验因驱动不可用尚未完成，状态见文末。
 
 **Phase 6 进行中**：**粒子-壁面排斥势**已实现（W8a–W8e 全绿，`wall_pot=none` 时
 W1–W7 逐字节回归通过），**多粒子集体沉降算例已能跑通**（`config/sed.cfg`，
@@ -22,6 +23,8 @@ W1–W7 逐字节回归通过），**多粒子集体沉降算例已能跑通**�
 
 > ⚠️ **`--noise` 与 `--equipart` 已不存在**；`--check-wall` 的 W5b 只剩 γ=2 vs γ≡1
 > 的对照（子判据①），原先「与周期控制同量级」的子判据②随周期基线一起删除。
+> W5'a 也已随测试专用 `adv_on/noise_skip` 开关删除；历史结果保留在 Phase 7-B 记录中，
+> 不再列入当前覆盖。
 
 ## 总体规划
 
@@ -802,7 +805,7 @@ ae13f10  Phase 0: 基线固化 - README 记录缺陷清单, spike 验证模板 r
 
 ```
 src/            生产代码（只此一处）
-  include/      Stencil.h(交错网格唯一真值源) Wall.h(z 向边界唯一真值源)
+  include/      Stencil.h(交错网格唯一真值源) Wall.h(z 棱边布局+法向面钉死)
                 Common.h(POD+工厂) Check.h
                 Stokes/Viscosity/Force/Velocity(物理)  Config(key=value)
                 IOBin(.fpd)  State(分配/映射/释放唯一持有者)
@@ -868,3 +871,22 @@ doc/            PressurePoisson.md(泊松+壁面数学推导, §12-15 与 Poisso
 
 后续优化：生产检查点同步仅回传速度和粒子数组，不再回传压力；测试侧读取压力的
 接口仍保留。优化后壁面判据日志逐字节相同，两组 step 0/50 检查点整文件逐位相同。
+
+## Stokes 应力三 kernel 重构（2026-09-22）
+
+为让代码结构直接对应离散定义域，`Stokes.cpp` 的应力装配拆成三段：体心与 XY 棱
+$k\in[0,N_z-1]$、内部 YZ/ZX 棱 $k\in[0,N_z-2]$、两片壁面 $k=-1,N_z-1$。
+壁面段显式使用代入 ghost 后的 $\mp2\eta v$ 公式；因此删除 `wz_vx/wz_vy/wz_vz`，
+也删除带上壁 off-by-one 的 `wz_edge_at_wall/wz_noise_gamma`。内部噪声固定 $\gamma=1$，
+壁面噪声使用 `noise_gamma1 ? 1 : 2`，W5b 的 $\gamma=1$ 对照仍保留。
+
+用户决定不再保留仅服务于 W5'a 的 `adv_on/noise_skip`，对应矩阵恒等式判据完整删除。
+这是一项明确的覆盖损失：当前壁面噪声幅度由 W5b 统计差分判据负责，不再宣称具有
+无统计误差的 FDT 矩阵恒等式覆盖。历史 W5'a 数值仍保留在上面的 Phase 7-B 记录中。
+
+新增 W3b，独立读取两片壁面的 `pi_nx/pi_ny`，核对四条 $\mp2\eta v$ 展开式。
+构建、`--check`、`--check-config`、`--check-potential`、`--check-tridiag` 已通过。
+当前 `nvidia-smi` 无法连接驱动；`--check-wall` 与 `--check-poisson` 均在创建 xy cuFFT
+plan 时以错误 5 中止。因此 W3b/W5b 和无噪声检查点逐位对照仍待 GPU 环境恢复，
+不能把这一环境阻塞记成壁面数值验证通过。计划与结果归档在
+`baseline/stokes_3kernel_20260922/`。

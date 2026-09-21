@@ -64,8 +64,9 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
 - 索引 `i + j*Nx + k*Nx*Ny`，x 最快；dx、密度、溶剂粘度均为 1。
 - Stencil.h 是半格偏移、支撑域截断和模板回绕的唯一实现。
   模板盒 n_range = 2*range+1；投影与归一化使用同一位置和同一权重，各方向独立。
-- Wall.h 是 z 邻居访问、ghost、棱边存储和壁面噪声因子的唯一实现。
-  Stokes.cpp 不手写替代访问；棱边为 Nx*Ny*(Nz+1)，调用方保证索引范围。
+- Wall.h 是 z 棱边存储、法向面钉死和 RNG 长度的唯一实现；棱边为 Nx*Ny*(Nz+1)，
+  调用方保证索引范围。Stokes.cpp 按体心、内部 z 棱、两片壁面三个 kernel 计算通量，
+  壁面 kernel 使用已经代入 ghost 后的显式 ±2vx/±2vy 公式。
 - Poisson.cpp 与 doc/PressurePoisson.md §12 共同定义 div∘grad。
   变换归一化为 Nx*Ny；(0,0) 奇异列用 d_0 -= 1 定规，不能清空整列。
 - 速度/噪声边界属于 Wall.h；粒子壁面力属于 Potential.h，二者分开维护。
@@ -90,7 +91,8 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
 | 配置/主流程精简 | --check-config、合法输入检查点前后对照、单粒子重启 |
 | 二进制 IO 任一侧 | 下述 C++/Python 互操作检查 |
 
---check-wall 覆盖 W1–W6、W4s、W5'a/W5b 及 W8；W8e 是近壁 GPU/CPU 力装配对照。
+--check-wall 覆盖 W1–W6、W3b、W4s、W5b 及 W8；W3b 直接核对两片壁面剪切通量，
+W8e 是近壁 GPU/CPU 力装配对照。
 关闭壁面势时的回归锚是原壁面判据输出不变，不能用 W8e 单项替代。
 粒子侧壁面 FDT/冻结粒子能量均分尚未完成；历史 W7 重启记录不代表它已验证。
 已删除的 --noise/--equipart 不属于现有覆盖；详见 PROGRESS.md 已知隐患。

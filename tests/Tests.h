@@ -33,9 +33,10 @@ int run_check_tridiag();
 // Nx<=0 时跑内置电池（偶/奇 Nz + 中盒子），否则只跑指定单盒。
 int run_check_poisson(int Nx, int Ny, int Nz);
 
-// Phase 7-B z 向无滑移壁面判据（需 GPU，但全部【不开噪声】）：
+// Phase 7-B z 向无滑移壁面判据（需 GPU；除 W5b 外不开噪声）：
 //   W1 ∇·v 含两个壁面层到机器精度 / W2 vz 两壁钉死
-//   W3 平面 Poiseuille 与精确离散闭式一致
+//   W3 平面 Poiseuille 与精确离散闭式一致 / W3b 两片壁面剪切通量展开式
+//   W5b 壁面 γ=2 与 γ=1 能量均分对照
 //   W6 z 向动量收支恒等式逐步成立
 // Nx<=0 时用内置盒子（16³）。
 int run_check_wall(int Nx, int Ny, int Nz);

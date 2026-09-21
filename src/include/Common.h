@@ -12,19 +12,12 @@ struct NS_Config
 {
     // z 边界【只有一种】：x/y 周期，z 上下无滑移硬壁。曾有的 wall_z 字段与
     // 三维 FFT 全周期路径已于 Phase 8-A 整条删除 —— 单一语义 = 单一漂移面。
-    // z 向访问的唯一真值源是 Wall.h。
+    // 棱边存储与法向面钉死由 Wall.h 定义；切向壁面通量在 Stokes.cpp 显式展开。
     int    Nx, Ny, Nz;
     double dt, inv_dt;
     double W;           // 噪声强度系数，应由 kT 派生：W = sqrt(2*kT/dt)
 
     // --- 判据专用开关（生产路径恒为默认值）---
-    // adv_on = 0 关掉对流项：系统退化成【严格线性高斯】，于是
-    //   「平稳协方差 == kT·I」变成一条精确的矩阵恒等式，可以用逐个注入单位向量的
-    //   方式秒级判定，不需要跑几小时做统计。这是能造出来的最强单元测试。
-    // noise_skip = 1 时不重新生成随机数，直接用 randD/randN 的现值 —— 供判据注入。
-    // 两者取默认值时，算术表达式与没有它们时【逐位一致】（乘 1.0 是精确的）。
-    int    adv_on;
-    int    noise_skip;
     // noise_gamma1 = 1 时把壁面棱边的噪声因子强制成 1（关掉 √2）。**只为判据对照**，
     // 用来证明 √2 是被数据选中的、而不是被假设的。生产路径恒为 0。
     int    noise_gamma1;
@@ -79,8 +72,6 @@ static inline NS_Config make_ns_config(int Nx, int Ny, int Nz,
     cfg.dt     = dt;
     cfg.inv_dt = 1.0 / dt;
     cfg.W      = noise_on ? sqrt(2.0 * kT / dt) : 0.0;
-    cfg.adv_on       = 1;
-    cfg.noise_skip   = 0;
     cfg.noise_gamma1 = 0;
     return cfg;
 }

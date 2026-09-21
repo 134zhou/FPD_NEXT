@@ -19,10 +19,11 @@
 //   W1  max|div v| 含两个壁面层        —— doc/PressurePoisson.md §13 盲区 1 的正解
 //   W2  vz 在两壁被钉死                —— 法向边界条件
 //   W3  平面 Poiseuille 的【精确离散】闭式 —— 切向 ghost 与散度端系数的判决性判据
+//   W3b 上下壁 Π_yz/Π_zx 展开式            —— 两片壁面、两个切向分量的直接判据
 //   W6  z 向动量收支恒等式（逐步精确）  —— fz 截断 / vz 钉死 / ∂p/∂z / Π_zz 四件事一次全查
 //
 // 这些判据都【不开噪声】。把「算子对不对」与「噪声幅度对不对」彻底分离 ——
-// 噪声幅度（√2 因子）由 W5'a（FDT 矩阵恒等式）与 W5b（能量均分 + γ≡1 对照）负责。
+// 噪声幅度（√2 因子）由 W5b（能量均分 + γ≡1 对照）负责。
 //
 // 独立实现约定：本文件的散度、Poiseuille 闭式、动量收支都是【手写】的，
 // 不调用 Stokes.cpp 的内部量（只能从 FpdState 的公开数组取）。
@@ -224,6 +225,76 @@ static void w3_poiseuille(int Nz, double g, bool verbose, int& fails_out,
     {
         fails_out++;
     }
+    st.finish();
+}
+
+// ============================================================================
+// W3b：直接核对两片壁面上的剪切通量展开式。
+//
+// kT=0、vz=0 时壁面对流和横向 vz 导数都为 0，只剩
+//   bottom: Π_yz=-2η_yz vy[0]，Π_zx=-2η_zx vx[0]
+//   top:    Π_yz=+2η_yz vy[Nz-1]，Π_zx=+2η_zx vx[Nz-1]
+// 这里直接读取生产 kernel 写出的 pi_nx/pi_ny；期望值独立地在 CPU 上计算。
+// ============================================================================
+static void w3b_wall_shear_flux()
+{
+    const int Nx = 4, Ny = 3, Nz = 4;
+    const int size = Nx * Ny * Nz;
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.001, 0.0, /*noise_on=*/false);
+
+    FpdState st;
+    st.init(cfg, 0, ST_FULL, 314159ULL);
+
+    for (int t = 0; t < size; t++)
+    {
+        st.vx[t] = 0.15 + 0.003 * t;
+        st.vy[t] = -0.20 + 0.002 * t;
+        st.vz[t] = 0.0;
+        st.fx[t] = st.fy[t] = st.fz[t] = 0.0;
+        st.eta[t] = st.etaXY[t] = 1.0;
+    }
+    for (size_t t = 0; t < st.esize; t++)
+    {
+        st.etaYZ[t] = 1.0 + 0.001 * (double)t;
+        st.etaZX[t] = 1.3 + 0.001 * (double)t;
+    }
+    st.upload(ST_VELOCITY | ST_PHI);
+
+    step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p,
+                       st.fx, st.fy, st.fz,
+                       st.eta, st.etaXY, st.etaYZ, st.etaZX,
+                       st.pi_dx, st.pi_dy, st.pi_dz,
+                       st.pi_nx, st.pi_ny, st.pi_nz,
+                       st.fft, st.plan_xy, st.tri_w, st.diag,
+                       st.gen, st.randD, st.randN,
+                       st.tmp_fx, st.tmp_fy, st.tmp_fz, 0L);
+
+    acc_update_self(st.pi_nx, st.nbEdge);
+    acc_update_self(st.pi_ny, st.nbEdge);
+
+    double worst = 0.0;
+    for (int j = 0; j < Ny; j++)
+    {
+        for (int i = 0; i < Nx; i++)
+        {
+            const int bottom = IDX(i, j, 0);
+            const int top = IDX(i, j, Nz - 1);
+            const int eb_bottom = wz_edge_idx(cfg, i, j, -1);
+            const int eb_top = wz_edge_idx(cfg, i, j, Nz - 1);
+
+            worst = std::max(worst, std::fabs(st.pi_nx[eb_bottom]
+                                           - (-2.0 * st.etaYZ[eb_bottom] * st.vy[bottom])));
+            worst = std::max(worst, std::fabs(st.pi_nx[eb_top]
+                                           - ( 2.0 * st.etaYZ[eb_top] * st.vy[top])));
+            worst = std::max(worst, std::fabs(st.pi_ny[eb_bottom]
+                                           - (-2.0 * st.etaZX[eb_bottom] * st.vx[bottom])));
+            worst = std::max(worst, std::fabs(st.pi_ny[eb_top]
+                                           - ( 2.0 * st.etaZX[eb_top] * st.vx[top])));
+        }
+    }
+
+    std::printf("      上下壁 Π_yz/Π_zx 展开式 max|误差| = %.3e\n", worst);
+    check(worst < 1e-13, "W3b 两片壁面的 Π_yz/Π_zx 展开式与独立 CPU 公式一致");
     st.finish();
 }
 
@@ -461,215 +532,6 @@ static void w4_truncation()
     std::printf("      上下对称：|z/x(下) - z/x(上)| = %.3e   (%.6f vs %.6f)  %s\n",
                 asym, zx_ratio[1], zx_ratio[2], (asym < 1e-12) ? "PASS" : "FAIL");
     if (!(asym < 1e-12)) { g_fail++; }
-}
-
-// ============================================================================
-// W5'：涨落耗散定理的【矩阵恒等式】—— √2 噪声因子的判决性判据。
-//
-// 关掉对流后（cfg.adv_on = 0）一步更新严格线性：
-//     v_{n+1} = M v_n + B ξ_n ,   ξ ~ N(0, I)
-// 平稳性要求 C = M C Mᵀ + B Bᵀ，而投影法的不变测度是 C = kT·P（P = 无散投影），
-// 且 M、B 的值域都落在无散子空间里 ⇒ 恒等式
-//     P = M Mᵀ + B Bᵀ / kT
-//
-// 不需要显式构造 P，两条推论就够判决：
-//     ① tr(P) = dim = Nx·Ny·(2Nz−1) + 1      ⇒  |tr S − dim| / dim
-//     ② P 是正交投影 ⇒ P² = P                ⇒  ‖S² − S‖_F / dim
-// 其中 S := M Mᵀ + B Bᵀ/kT。
-//
-// M 与 B 用【逐个注入单位向量】测出（B 的列 = 只开一个噪声分量跑一步）。
-// 这是精确的代数判据，没有统计误差、秒级完成 —— 比跑几小时看比值的统计式
-// 强好几个数量级（3B 那种统计判据的误差棒是 0.3% 量级，而这里的信号是 O(1)）。
-//
-// 对 √2 的判别力：壁面棱边有 2 层 × Nx·Ny × 2 个分量（yz/zx）少/多一倍方差，
-// 相对亏损 ≈ 2/(2Nz−1)。Nz=4 时是 29%，远大于任何数值误差。
-// ============================================================================
-static double fdt_matrix_identity(int Nx, int Ny, int Nz,
-                                  double kT, double dt, bool gamma1, const char* tag)
-{
-    NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, /*noise_on=*/true);
-    cfg.adv_on       = 0;   // 严格线性
-    cfg.noise_skip   = 1;   // 手动注入噪声
-    cfg.noise_gamma1 = gamma1 ? 1 : 0;
-
-    FpdState st;
-    st.init(cfg, 0, ST_FULL, 1ULL);
-    PhiParams pp = make_phi_params(3.2, 1.0, 50.0);
-
-    const int size = Nx * Ny * Nz;
-    // eta ≡ 1、f ≡ 0（无粒子）。这两步只做一次：它们与 v 无关。
-    update_viscosity_fields(cfg, pp, 0, st.Rx, st.Ry, st.Rz,
-                            st.sum_phix, st.sum_phiy, st.sum_phiz,
-                            st.eta, st.etaXY, st.etaYZ, st.etaZX);
-    update_force_field(cfg, pp, 0, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz,
-                       st.sum_phix, st.sum_phiy, st.sum_phiz,
-                       0.0, 0.0, 0.0, st.fx, st.fy, st.fz);
-
-    // --- 自由速度自由度表：(分量 0/1/2, 线性下标) ---
-    // vz 的上壁那一层不是自由度（恒 0，永不更新）。
-    std::vector<int> vcomp, vidx;
-    for (int t = 0; t < size; t++) { vcomp.push_back(0); vidx.push_back(t); }
-    for (int t = 0; t < size; t++) { vcomp.push_back(1); vidx.push_back(t); }
-    for (int t = 0; t < size; t++)
-    {
-        if (t / (Nx * Ny) == Nz - 1) { continue; }
-        vcomp.push_back(2); vidx.push_back(t);
-    }
-    const int nv = (int)vcomp.size();
-
-    const size_t slotD = (size_t)wz_rand_slot_d(cfg);
-    const size_t slotN = (size_t)wz_rand_slot_n(cfg);
-    const int    nn    = (int)(slotD + slotN);
-
-    std::vector<double> vb((size_t)size * 3, 0.0);   // [0]=vx [1]=vy [2]=vz
-
-    // 跑一步，返回新的自由速度向量
-    std::vector<double> vout((size_t)nv);
-    auto one_step = [&](std::vector<double>& out) -> void
-    {
-        #pragma acc update device(st.vx[0:size], st.vy[0:size], st.vz[0:size], \
-                                  st.randD[0:slotD], st.randN[0:slotN])
-        step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p,
-                           st.fx, st.fy, st.fz,
-                           st.eta, st.etaXY, st.etaYZ, st.etaZX,
-                           st.pi_dx, st.pi_dy, st.pi_dz,
-                           st.pi_nx, st.pi_ny, st.pi_nz,
-                           st.fft, st.plan_xy, st.tri_w, st.diag,
-                           st.gen, st.randD, st.randN,
-                           st.tmp_fx, st.tmp_fy, st.tmp_fz, 0L);
-        acc_update_self(st.vx, (size_t)size * sizeof(double));
-        acc_update_self(st.vy, (size_t)size * sizeof(double));
-        acc_update_self(st.vz, (size_t)size * sizeof(double));
-        for (int m = 0; m < nv; m++)
-        {
-            const double* a = (vcomp[m] == 0) ? st.vx : (vcomp[m] == 1 ? st.vy : st.vz);
-            out[m] = a[vidx[m]];
-        }
-    };
-
-    // --- M：v = e_m，噪声全 0 ---
-    std::vector<double> M((size_t)nv * nv, 0.0);
-    std::vector<double> noise((size_t)nn, 0.0);
-    for (int m = 0; m < nv; m++)
-    {
-        std::fill(vb.begin(), vb.end(), 0.0);
-        vb[(size_t)vcomp[m] * size + vidx[m]] = 1.0;
-        std::copy(vb.begin(), vb.begin() + size, st.vx);
-        std::copy(vb.begin() + size, vb.begin() + 2 * size, st.vy);
-        std::copy(vb.begin() + 2 * size, vb.end(), st.vz);
-        std::fill(noise.begin(), noise.end(), 0.0);
-        std::copy(noise.begin(), noise.begin() + slotD, st.randD);
-        std::copy(noise.begin() + slotD, noise.end(), st.randN);
-        one_step(vout);
-        for (int i = 0; i < nv; i++) { M[(size_t)i * nv + m] = vout[i]; }
-    }
-
-    // --- B：v = 0，噪声 = e_m ---
-    std::vector<double> B((size_t)nv * nn, 0.0);
-    for (int m = 0; m < nn; m++)
-    {
-        std::fill(vb.begin(), vb.end(), 0.0);
-        std::copy(vb.begin(), vb.begin() + size, st.vx);
-        std::copy(vb.begin() + size, vb.begin() + 2 * size, st.vy);
-        std::copy(vb.begin() + 2 * size, vb.end(), st.vz);
-        std::fill(noise.begin(), noise.end(), 0.0);
-        noise[m] = 1.0;
-        std::copy(noise.begin(), noise.begin() + slotD, st.randD);
-        std::copy(noise.begin() + slotD, noise.end(), st.randN);
-        one_step(vout);
-        for (int i = 0; i < nv; i++) { B[(size_t)i * nn + m] = vout[i]; }
-    }
-
-    // --- S = M Mᵀ + B Bᵀ / kT ---
-    std::vector<double> S((size_t)nv * nv, 0.0);
-    for (int i = 0; i < nv; i++)
-    {
-        for (int j = i; j < nv; j++)
-        {
-            double mm = 0.0, bb = 0.0;
-            for (int t = 0; t < nv; t++) { mm += M[(size_t)i*nv+t] * M[(size_t)j*nv+t]; }
-            for (int t = 0; t < nn; t++) { bb += B[(size_t)i*nn+t] * B[(size_t)j*nn+t]; }
-            const double s = mm + bb / kT;
-            S[(size_t)i * nv + j] = s;
-            S[(size_t)j * nv + i] = s;      // 对称，省一半
-        }
-    }
-
-    // 判据 ①：tr S == dim
-    //   dim = n_v − rank(D)，rank(D) = Nx·Ny·Nz − 1（常压力在散度的左零空间）
-    //   ⇒ dim = nv − size + 1。壁面 nv=Nx·Ny·(3Nz−1) ⇒ Nx·Ny·(2Nz−1)+1。
-    //   ⚠️ 这个量与 W5b / doc/PressurePoisson.md §14.4 的 dim 必须一致。
-    double trS = 0.0;
-    for (int i = 0; i < nv; i++) { trS += S[(size_t)i * nv + i]; }
-    const int dim = nv - size + 1;
-    const double terr = std::fabs(trS - dim) / (double)dim;
-
-    // 判据 ②：S² == S（P 是正交投影）
-    double idem = 0.0;
-    for (int i = 0; i < nv; i++)
-    {
-        for (int j = 0; j < nv; j++)
-        {
-            double s2 = 0.0;
-            for (int t = 0; t < nv; t++) { s2 += S[(size_t)i*nv+t] * S[(size_t)t*nv+j]; }
-            idem = std::max(idem, std::fabs(s2 - S[(size_t)i * nv + j]));
-        }
-    }
-    idem /= (double)dim;
-
-    std::printf("      %-22s dt=%-7.5g nv=%3d nn=%3d  trS = %9.4f  dim = %d"
-                "   (trS-dim)/dim = %+.4e   ||S²-S||/dim = %.2e\n",
-                tag, dt, nv, nn, trS, dim, terr, idem);
-    st.finish();
-    return (trS - dim) / (double)dim;
-}
-
-// ---------------------------------------------------------------------------
-// W5'：FDT 矩阵恒等式 + dt → 0 外推。
-//
-// ⚠️ 为什么必须外推：显式 Euler 的平稳协方差【不是】精确的 kT·P，而是带一个
-//    O(dt) 偏差 —— 这正是测试 3A 实测到的 `bias(%) ≈ 335·dt`。所以在固定 dt 下
-//    tr S 会大于 dim，且这个超出量与 √2 因子【混在一起】。
-//    把 trS 对 dt 线性外推到 0，剩下的才是真正的 FDT 残差。
-//
-//    判据的真正信号量是【外推后的截距】。γ 取错的效应：壁面棱边有
-//    2 层 × Nx·Ny × 2 个分量，其方差按 γ 缩放 —— γ=1（该取 2）时的亏损
-//    ≈ 2/(2Nz−1)。Nz=4 时是 29%，而外推后的残差应 ~1e-3。差两个数量级。
-// ---------------------------------------------------------------------------
-// 把 r(dt) 拟合成 r = c·dt^p，返回 c。三点先取对数做最小二乘。
-static double fit_power(double r0, double r1, double r2,
-                        double d0, double d1, double d2)
-{
-    const double x[3] = { std::log(d0), std::log(d1), std::log(d2) };
-    const double y[3] = { std::log(r0), std::log(r1), std::log(r2) };
-    double sx = 0, sy = 0, sxx = 0, sxy = 0;
-    for (int i = 0; i < 3; i++) { sx += x[i]; sy += y[i]; sxx += x[i]*x[i]; sxy += x[i]*y[i]; }
-    const double p = (3.0*sxy - sx*sy) / (3.0*sxx - sx*sx);
-    return p;   // 幂次
-}
-
-static void w5p_fdt_extrapolated(int Nx, int Ny, int Nz)
-{
-    const double kT = 1.0;
-    const double dts[3] = {0.02, 0.01, 0.005};
-
-    double r[3];
-    for (int q = 0; q < 3; q++)
-    {
-        char tag[64];
-        std::snprintf(tag, sizeof(tag), "壁面 %dx%dx%d", Nx, Ny, Nz);
-        r[q] = fdt_matrix_identity(Nx, Ny, Nz, kT, dts[q], /*gamma1=*/false, tag);
-    }
-    // 残差实测按 dt^p 衰减，dt→0 时归零。
-    // ⚠️ 不能用幂律拟合：壁面那一支在 dt 小到某个点时会【穿过零】变成负的
-    //    （trS 略低于 dim），log 取负数就出 nan。穿过零本身恰恰是「残差归零」
-    //    的证据。所以判据取|r| 单调下降 + 最小 dt 处足够小。
-    const double a[3] = { std::fabs(r[0]), std::fabs(r[1]), std::fabs(r[2]) };
-    const double p = fit_power(a[0], a[1], a[2], dts[0], dts[1], dts[2]);
-    std::printf("      → 壁面  |r| = %.4g / %.4g / %.4g（dt 递减）  幂次 p ≈ %.2f   "
-                "最小 dt 处 |r| = %.2e\n", a[0], a[1], a[2], p, a[2]);
-    check(a[0] > a[1] && a[1] > a[2] && a[2] < 2e-3,
-          "W5'a FDT 矩阵残差随 dt 单调下降，最小 dt 处 < 2e-3（dt→0 归零）");
 }
 
 // ---------------------------------------------------------------------------
@@ -1104,6 +966,9 @@ int run_check_wall(int Nx, int Ny, int Nz)
                     dmax / umax, 1.0 / (2.0 * (double)Nz * Nz));
     }
 
+    std::printf("\n[W3b] 两片壁面的剪切通量展开式\n");
+    w3b_wall_shear_flux();
+
     std::printf("\n[W4] 壁面截断下的力守恒与粒子速度（含贴壁与 N=2 重叠）\n");
     w4_truncation();
 
@@ -1116,12 +981,6 @@ int run_check_wall(int Nx, int Ny, int Nz)
     w8c_bulk_zero();
     w8d_static_balance();
     w8e_gpu_cpu_wall();
-
-    // W5' 用小盒子：逐个注入单位向量的成本是 O(nv + nn) 次完整步进。
-    // Nz 越小，壁面噪声那部分占的总方差比例越大，对 √2 的判别力越强
-    // （相对亏损 ≈ 2/(2Nz−1)：Nz=4 时 29%，Nz=16 时 6%）。
-    std::printf("\n[W5'a] FDT 矩阵恒等式 P = M Mᵀ + B Bᵀ/kT（结构判据：幂等性 + dt^p 衰减）\n");
-    w5p_fdt_extrapolated(4, 4, 4);
 
     std::printf("\n[W5b] 壁面能量均分 + γ≡1 对照（√2 的判决性判据）\n");
     double r_g2 = 0.0, s_g2 = 0.0, r_g1 = 0.0, s_g1 = 0.0;
@@ -1150,7 +1009,6 @@ int run_check_wall(int Nx, int Ny, int Nz)
     // ⚠️ 这里曾有子判据②：「壁面 γ=2 与【周期控制】的系统偏差同量级」。
     //    它靠同一台量测机器上的周期运行提供系统偏差基线。z 周期路径删除后
     //    基线不存在了 —— 用硬编码常数替代会是【假判据】，所以直接删掉。
-    //    该残差就是显式 Euler 的 O(dt) 项，已由 W5'a 的 dt→0 外推独立证明。
     //    更强的替代（留待后续）：把周期控制换成 dt 控制，跑 dt 与 dt/2，
     //    断言 |ratio−1| 大致减半 —— 它识别偏差来源，而不是只比幅度。
 

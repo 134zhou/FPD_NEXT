@@ -101,7 +101,7 @@ v3 文件头只含尺寸、粒子数和 step，v2 文件明确拒绝。VTK 转�
 | 配置文件 / checkpoint | ✅ Phase 2 完成，重启逐位复现 |
 | 可视化 | ✅ `tools/fpd2vtk.py` 离线转 VTK（ParaView 开一个 .pvd） |
 | z 向壁面泊松求解器 | ✅ xy 2D FFT + z 向 Thomas，通过算子往返判据 |
-| **z 向无滑移壁面（Phase 7）** | ✅ **已接线到生产路径**，W1–W7 判据全绿 |
+| **z 向无滑移壁面（Phase 7）** | 🟡 已接线；三 kernel 重构编译通过，本轮完整 GPU 复验受 cuFFT 错误 5 阻塞 |
 | **粒子-壁面排斥势（Phase 6）** | ✅ WCA/Morse/LJ 三族，W8a–W8e 全绿 + 回归锚逐字节 |
 | **集体沉降算例（Phase 6）** | 🟡 能跑通（`config/sed.cfg`，N=95）+ `--sed-stats` 统计 |
 | 绝对 Stokes 阻力 / 迁移率（Phase 4） | ❌ 未做（需 L 外推，见「能说什么」） |
@@ -140,8 +140,8 @@ v3 文件头只含尺寸、粒子数和 step，v2 文件明确拒绝。VTK 转�
 
 **Phase 7-B 把它接线到生产路径**：切向无滑移走 ghost、壁面剪切噪声 ×√2、
 相场在壁面按 `Loc` 截断、棱边数组 `Nz+1` 层。判据
-`./build/fpd_check --check-wall`（W1/W2/W3/W4/W4s/W5'a/W5b/W6/W7）。
-z 向访问的唯一真值源是 `src/include/Wall.h`。
+`./build/fpd_check --check-wall`（W1/W2/W3/W3b/W4/W4s/W5b/W6/W8）。
+z 棱边布局与法向面钉死由 `src/include/Wall.h` 定义；切向壁面通量在 `Stokes.cpp` 显式展开。
 
 ```bash
 # 壁面是现在【唯一】的 z 边界，粒子自动被约束在离两壁 >= range 的区间内
@@ -305,7 +305,7 @@ J6 势特征点 + POT_NONE 零判据 + 标号交换对称性
 ./build/fpd_check --check-potential   # 势函数自检（纯 CPU，无卡可跑）
 ./build/fpd_check --check-tridiag     # 三对角 vs 稠密 Gauss（纯 CPU）
 ./build/fpd_check --check-poisson     # 壁面算子往返（需 GPU）
-./build/fpd_check --check-wall        # z 向壁面判据 W1/W2/W3/W4/W4s/W6/W5'a/W5b/W7（需 GPU）
+./build/fpd_check --check-wall        # z 向壁面判据 W1/W2/W3/W3b/W4/W4s/W6/W5b/W8（需 GPU）
 ./build/fpd_check --lambda [L]        # 常量表（纯 CPU，秒级）
 ```
 
@@ -340,13 +340,14 @@ eta_max 分离 49.85 ≈ 50（C3 修复前是 ~50.85）；重叠 90.5
 ## z 向无滑移壁面（Phase 7；Phase 8-A 起是**唯一**的 z 边界）
 
 **z 边界只有一种**：x/y 周期，z 上下无滑移硬壁；这是固定语义，不是配置项。
-z 向访问的**唯一真值源**是 `src/include/Wall.h`；完整推导见 `doc/PressurePoisson.md` §14。
+z 棱边布局与法向面钉死由 `src/include/Wall.h` 定义，切向壁面通量由 `Stokes.cpp`
+的独立壁面 kernel 显式实现；完整推导见 `doc/PressurePoisson.md` §14。
 
 ### 三个非显然的设计点
 
-- **切向无滑移用 ghost**：`vx[-1] = -vx[0]`、`vx[Nz] = -vx[Nz-1]`，`vz` 两壁恒 0。
-  代入 K1 既有公式后，壁面棱边的**两个对流因子同时为 0**（物理正确：壁面不输运动量），
-  粘性项自动给出 `±2vx`。所以 K1 不需要壁面特例分支
+- **切向无滑移由壁面通量展开式实现**：从 `vx[-1] = -vx[0]`、
+  `vx[Nz] = -vx[Nz-1]`（`vy` 同理）推得壁面对流为 0、粘性项为 `±2ηvx/±2ηvy`。
+  `Stokes.cpp` 把体心、内部 z 棱和两片壁面拆成三个 kernel，壁面 kernel 直接写展开式
 - **棱边数组多一层**：`Π_yz`/`Π_zx` 在 `z=∓1/2` 的两片壁面都是**壁面剪切应力**，
   而 `k=-1` 与 `k=Nz-1` 在 Nz 层布局下会**撞同一个槽位**。故开 `Nz+1` 层。
   逻辑 `k` 的物理含义与存储映射**解耦** —— 这是避开「整体重编号」静默漂移的关键。
@@ -362,11 +363,11 @@ W1  max|div v|/max|v| = 3.4e-16  含 k=0 与 k=Nz-1 两个壁面层（7-A 盲区
 W2  vz[:,:,Nz-1] 逐位为 0
 W3  平面 Poiseuille 与【精确离散】闭式 vx[k]=(g/2η)[(Nz²+1)/4−(k−(Nz−1)/2)²]
     的相对差 = 0.000e+00 —— 判决性判死 ghost 因子 2 与散度端系数 1
+W3b 两片壁面的 Π_yz/Π_zx 与独立 CPU 展开式一致（本轮待 GPU 复验）
 W4  力守恒 ≤5.3e-15（远离壁/贴下壁/贴上壁/N=2 重叠）；均匀流场 V_i = 0.000e+00
 W4s 上下壁离散镜像位置上 sum_phiz/sum_phix 逐个数字相等 = 0.000e+00
 W6  z 向动量收支恒等式逐步成立，相对偏差 1.3e-15
 W5b 能量均分：γ=2 → 0.9750±0.0029，γ≡1 → 0.9427±0.0028，差 8.0σ
-W7  壁面模式逐位重启（5 步 vs 2+3 步）全部逐位相同
 W8  粒子-壁面排斥势（Phase 6）：力=-dU/dz 四阶差分的最大相对差 2.7e-10；
     上下壁镜像逐位反对称；体相逐位零力；平衡高度处 重力+壁面力 = 7.3e-14；
     半间隙处排斥力 = 1.7e+04 × 重力（压不穿）
