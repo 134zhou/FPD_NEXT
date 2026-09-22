@@ -890,3 +890,11 @@ $k\in[0,N_z-1]$、内部 YZ/ZX 棱 $k\in[0,N_z-2]$、两片壁面 $k=-1,N_z-1$�
 plan 时以错误 5 中止。因此 W3b/W5b 和无噪声检查点逐位对照仍待 GPU 环境恢复，
 不能把这一环境阻塞记成壁面数值验证通过。计划与结果归档在
 `baseline/stokes_3kernel_20260922/`。
+
+## 压力泊松代码阅读记录（2026-09-22）
+
+新增 `doc/PoissonCodeWalkthrough.md`，集中记录本轮对 `(0,0,k)` 模式、奇异列相容性
+投影、速度投影、Thomas 前代/回代变量映射，以及 OpenACC 下 CPU/GPU 分工的理解。
+当前工作区另有用户进行中的 `Poisson.cpp` 接口精简：删除只转调一次的 `solve_wall`
+包装并让其函数体直接成为 `solve_pressure`。本轮只写文档，未重新构建或运行数值判据；
+该接口精简仍需构建并在正常 NVIDIA 环境运行 `--check-poisson`。

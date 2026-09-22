@@ -94,7 +94,7 @@ static void thomas_sweep(int Nx, int Ny, int Nz, double* fft_data, const double*
 // 2D 批量 FFT → 奇异列相容投影 → Thomas → 逆 2D FFT → p = Re/(Nx*Ny)。
 // 归一化因子是 Nx*Ny 而非 size（2D 变换点数），见 doc/PressurePoisson.md §9。
 // ---------------------------------------------------------------------------
-static void solve_wall(NS_Config cfg, double* fft_data, const double* tri_w,
+void solve_pressure(NS_Config cfg, double* fft_data, const double* tri_w,
                        cufftHandle plan_xy, double* p, double* diag)
 {
     const int Nx = cfg.Nx, Ny = cfg.Ny, Nz = cfg.Nz;
@@ -154,10 +154,4 @@ void build_tridiag_coeffs(NS_Config cfg, double* tri_w)
             }
         }
     }
-}
-
-void solve_pressure(NS_Config cfg, double* fft_data, const double* tri_w,
-                    cufftHandle plan_xy, double* p, double* diag)
-{
-    solve_wall(cfg, fft_data, tri_w, plan_xy, p, diag);
 }
