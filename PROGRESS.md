@@ -1,6 +1,6 @@
 # 进度记录
 
-最后更新：2026-09-22（Stokes 应力按离散定义域拆分）
+最后更新：2026-09-23（初态生成脚本精简）
 
 ## 一句话状态
 
@@ -585,7 +585,7 @@ N × n_range³ 次原子散写）。
 - `fpd_tool --sed-stats <f1> <f2> ...`：`<Vz>(t)` / 质心 / 极值 / **最小壁面间隙** / `φ(z)`
   剖面 + 分块平均平台。**复用 `tests/Analysis.cpp` 的分块平均**，不在 Python 里另写
   （否则会造出一个没有判据能发现的漂移点）。找不到平台时按设计拒绝背书。
-- `make_init.py --phi F`：由目标体积分数反推粒子数，并**同时打印两个 φ 约定**
+- `make_init.py --phi F`（当时接口，现已删除）：由目标体积分数反推粒子数，并**同时打印两个 φ 约定**
   （标称解析球 `(4/3)πa³` 与扩散界面 `∫φ`，差 24.1%）—— 文献里用哪个不统一，
   只给一个才是陷阱。
 - `fpd_tool --diff-ckpt` 补上了 `Fx/Fy/Fz`（原来漏了这三个数组，而壁面势改的正是 Fz）。
@@ -818,7 +818,7 @@ tests/          全部验证与测试代码
   Tests.h       自检函数声明
   tool_main.cpp fpd_tool（纯 CPU：dump-ckpt / diff-ckpt / verify-forces / sed-stats）
   spike/        一次性前置风险验证程序（不参与构建，各自单独编译）
-tools/          fpd_format.py(格式镜像) make_init.py(纯stdlib, --phi) fpd2vtk.py verify_vtk.py(pvpython)
+tools/          fpd_format.py(格式镜像) make_init.py(纯stdlib, 顶部数据块) fpd2vtk.py verify_vtk.py(pvpython)
 config/         smoke.cfg production.cfg sed.cfg(集体沉降, Phase 6)
 baseline/       各阶段实验日志与参考轨迹
 doc/            PressurePoisson.md(泊松+壁面数学推导, §12-15 与 Poisson.cpp/Wall.h/Potential.h 共同定义)
@@ -898,3 +898,11 @@ plan 时以错误 5 中止。因此 W3b/W5b 和无噪声检查点逐位对照仍
 当前工作区另有用户进行中的 `Poisson.cpp` 接口精简：删除只转调一次的 `solve_wall`
 包装并让其函数体直接成为 `solve_pressure`。本轮只写文档，未重新构建或运行数值判据；
 该接口精简仍需构建并在正常 NVIDIA 环境运行 `--check-poisson`。
+
+## 初态生成脚本精简（2026-09-23）
+
+`tools/make_init.py` 删除命令行接口和多模式分派，改为直接编辑顶部数据块后运行。
+仓库默认数据生成 `config/sed.cfg` 的 128×64×32、N=95 沉降初态；`POINTS` 可直接写
+空列表或粒子坐标，速度场保留 `zero/index` 源码开关。不改 `.fpd` v3 格式或写入实现。
+脚本从 248 行减至 85 行。默认输出与旧命令基线整文件逐位相同，index 轴序和 v3 校验
+也通过；记录见 `baseline/make_init_simplify_20260923/`。

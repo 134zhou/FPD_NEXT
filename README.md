@@ -52,19 +52,19 @@ cmake -B build && cmake --build build -j
 初始构型、检查点、重启文件是**同一个格式**，文件里的 `step` 决定从哪继续。
 
 ```bash
-# 1. 生成初始构型（纯 stdlib，任何 python3 都能跑）
-python3 tools/make_init.py --grid 128 64 32 --single -o out/prod_init.fpd
+# 1. 编辑 tools/make_init.py 顶部数据块，再生成初始构型（纯 stdlib）
+python3 tools/make_init.py
 
-# 2. 跑模拟
-./build/fpd config/production.cfg
+# 2. 默认数据块对应集体沉降配置
+./build/fpd config/sed.cfg
 
 # 3. 断点续跑：把某个检查点当 init_file 即可，同一个 key、同一段代码
-./build/fpd config/production.cfg --set init_file=out/prod_0010000.fpd
+./build/fpd config/sed.cfg --set init_file=out/sed_0010000.fpd
 
 # 4. 离线转可视化（必须 pvpython —— 系统 python3 无 numpy）
 PV=/home/doll/Software/ParaView-6.2.0-RC1-MPI-Linux-Python3.12-x86_64
-$PV/bin/pvpython tools/fpd2vtk.py out/prod_*.fpd --config config/production.cfg -o vis/
-# 然后在 ParaView 里打开 vis/prod.pvd —— 一个文件给出完整时间动画 + 流体/粒子双 block
+$PV/bin/pvpython tools/fpd2vtk.py out/sed_[0-9]*.fpd --config config/sed.cfg -o vis/
+# 然后在 ParaView 里打开 vis/sed.pvd —— 一个文件给出完整时间动画 + 流体/粒子双 block
 ```
 
 格式规范在 `src/include/IOBin.h`，Python 侧镜像实现在 `tools/fpd_format.py`。
@@ -144,8 +144,8 @@ v3 文件头只含尺寸、粒子数和 step，v2 文件明确拒绝。VTK 转�
 z 棱边布局与法向面钉死由 `src/include/Wall.h` 定义；切向壁面通量在 `Stokes.cpp` 显式展开。
 
 ```bash
-# 壁面是现在【唯一】的 z 边界，粒子自动被约束在离两壁 >= range 的区间内
-python3 tools/make_init.py --grid 32 32 32 --single -o out/init.fpd
+# 壁面是现在【唯一】的 z 边界；在 make_init.py 顶部直接写网格、坐标和输出路径
+python3 tools/make_init.py
 ./build/fpd config/smoke.cfg
 ```
 
@@ -431,12 +431,12 @@ wall_eps   = 1.0             # 与 gravity_z=-10 配出 h_rest ≈ 2.019
 ### 跑一个集体沉降算例
 
 ```bash
-python3 tools/make_init.py --grid 128 64 32 --phi 0.05 --seed 20260914 -o out/sed_init.fpd
+python3 tools/make_init.py                         # 默认即生成下述构型
 ./build/fpd config/sed.cfg                        # 128x64x32, N=95, 200k 步 ≈ 29 分钟
 ./build/fpd_tool --sed-stats out/sed_[0-9]*.fpd --config config/sed.cfg   # <Vz>(t) / 质心 / 最小壁面间隙 / φ(z)
 ```
 
-⚠️ `--phi` 会打印**两个**体积分数：标称解析球 `(4/3)πa³` 与扩散界面
+脚本会打印**两个**体积分数：标称解析球 `(4/3)πa³` 与扩散界面
 `∫φ = (4/3)πa³ + 8πaξ²π²/24`（大 24.1%）。文献里用哪个不统一，**报 φ 时必须写明**。
 
 **实测（128×64×32，N=95，200k 步 / 400 时间单位，29 分钟）**：

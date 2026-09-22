@@ -106,14 +106,16 @@ n_steps 是绝对目标步数。网格尺寸、N、step 来自文件，其余参
 numpy 形状必须为 (Nz, Ny, Nx)；版本、字段顺序与 FNV-1a 两侧同步。
 
 ```bash
-python3 tools/make_init.py --grid 8 4 2 --pattern index --empty -o /tmp/t.fpd
+# 临时把 make_init.py 顶部设为 8x4x2、POINTS=[]、VELOCITY_PATTERN="index"、OUT="/tmp/t.fpd"
+python3 tools/make_init.py
 ./build/fpd_tool --dump-ckpt /tmp/t.fpd --at 3 1 1  # 必须为 3001001
 PV=/home/doll/Software/ParaView-6.2.0-RC1-MPI-Linux-Python3.12-x86_64
 $PV/bin/pvpython tools/fpd2vtk.py --self-test
 $PV/bin/pvpython tools/fpd2vtk.py out/run_*.fpd --config config/production.cfg -o vis/
 ```
 
-make_init.py 仅依赖 stdlib；转换和 verify_vtk.py 必须使用 pvpython。
+make_init.py 无命令行参数且仅依赖 stdlib；网格、粒子坐标、速度图样和输出路径直接改文件顶部。
+转换和 verify_vtk.py 必须使用 pvpython。
 .fpd 不保存压力，压力仅在求解器内部及数值判据中使用；沉降统计需 --config。
 用户自行转换可视化，提供命令即可；ParaView 打开生成的 .pvd。
 沉降数据选择 out/sed_[0-9]*.fpd，避免包含或删除 sed_init.fpd。

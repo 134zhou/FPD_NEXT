@@ -5,7 +5,8 @@
 
 ⚠️ 两处独立实现同一个格式和同一个 FNV-1a 哈希，是典型的漂移点。
    改动任一侧后必须重跑互操作判据：
-       python3 tools/make_init.py --grid 8 4 2 --pattern index -o /tmp/t.fpd
+       # make_init.py 顶部临时设为 8x4x2、POINTS=[]、index、/tmp/t.fpd
+       python3 tools/make_init.py
        ./build/fpd_tool --dump-ckpt /tmp/t.fpd --at 3 1 1
 
 ⚠️ 数组按线性 IDX = i + j*Nx + k*Nx*Ny 顺序连续存放，即【x 变化最快】。
