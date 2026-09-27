@@ -1,6 +1,6 @@
 # 进度记录
 
-最后更新：2026-09-23（初态生成脚本精简）
+最后更新：2026-09-27（CMake 按生产/验证目标拆分）
 
 ## 一句话状态
 
@@ -906,3 +906,18 @@ plan 时以错误 5 中止。因此 W3b/W5b 和无噪声检查点逐位对照仍
 空列表或粒子坐标，速度场保留 `zero/index` 源码开关。不改 `.fpd` v3 格式或写入实现。
 脚本从 248 行减至 85 行。默认输出与旧命令基线整文件逐位相同，index 轴序和 v3 校验
 也通过；记录见 `baseline/make_init_simplify_20260923/`。
+
+## CMake 按目标构建拆分（2026-09-27）
+
+根 `CMakeLists.txt` 不再直接列出所有源文件；生产目标 `fpd_core`/`fpd`
+移到 `src/CMakeLists.txt`，验证和工具目标 `fpd_check`/`fpd_tool` 移到
+`tests/CMakeLists.txt`。`tests` 子目录以 `EXCLUDE_FROM_ALL` 加入，因此默认
+`cmake --build build -j` 只编译生产程序；验证代码用 `--target fpd_check`
+或 `--target fpd_tool` 按需单独编译。三个可执行文件仍输出到 `build/`
+根目录，验证程序仍复用唯一的生产库 `fpd_core`。
+
+全新 Makefiles 构建中，默认目标日志只出现 `fpd_core` 和 `fpd`，此时
+构建根目录仅有 `fpd`；两个显式目标随后分别构建成功。纯 CPU
+`--check-config`、`--check-potential`、`--check-tridiag` 全部通过。未修改
+数值内核，本次不重跑 GPU 数值判据。计划和结果见
+`baseline/cmake_split_20260927/`。

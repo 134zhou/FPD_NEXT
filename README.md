@@ -31,11 +31,15 @@
 ```bash
 cmake -B build && cmake --build build -j
 ./build/fpd config/production.cfg
+
+# 验证和检查工具按需单独编译
+cmake --build build --target fpd_check -j
+cmake --build build --target fpd_tool -j
 ```
 
 环境：nvc++ 26.3（NVIDIA HPC SDK）、CUDA 13.1、CMake 4.2.3、RTX 3060 12 GB。
 
-产出三个可执行文件：
+默认构建只产出生产程序 `fpd`；显式指定目标时再产出对应的验证或工具程序：
 
 | 可执行 | 来源 | 说明 |
 |---|---|---|
@@ -43,7 +47,9 @@ cmake -B build && cmake --build build -j
 | `build/fpd_check` | `tests/Check*.cpp` | 自检与验证（需 GPU；`--check-potential`/`--check-tridiag`/`--lambda` 纯 CPU） |
 | `build/fpd_tool` | `tests/tool_main.cpp` | 检查工具（纯 CPU：dump/diff 检查点、verify-forces） |
 
-**代码布局**：`src/` 只放生产代码，`tests/` 放全部验证与测试代码
+**代码布局**：根 `CMakeLists.txt` 只负责公共工具链和子目录入口；
+`src/CMakeLists.txt` 只定义生产目标，`tests/CMakeLists.txt` 定义按需编译的验证与工具目标。
+`src/` 只放生产代码，`tests/` 放全部验证与测试代码
 （含 `tests/spike/` 的一次性前置风险验证程序，不参与构建）。
 
 ## 输入输出

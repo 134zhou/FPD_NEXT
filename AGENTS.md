@@ -16,10 +16,12 @@
 - src/ 与 src/include/：生产实现；fpd_core 只能包含生产代码。
 - tests/：fpd_check、fpd_tool；tests/spike/：不参与常规构建的实验。
 - tools/：Python 初态生成与离线可视化；config/：运行配置。
-- 新验证代码加入 CMakeLists.txt 的 fpd_check 目标。
+- 新验证代码加入 tests/CMakeLists.txt 的 fpd_check 目标。
 
 ```bash
 cmake -B build && cmake --build build -j
+cmake --build build --target fpd_check -j
+cmake --build build --target fpd_tool -j
 ./build/fpd config/smoke.cfg --set n_steps=200
 ./build/fpd_check --check
 ./build/fpd_check --check-potential
