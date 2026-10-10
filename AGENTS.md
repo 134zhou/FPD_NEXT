@@ -118,6 +118,8 @@ $PV/bin/pvpython tools/fpd2vtk.py out/run_*.fpd --config config/production.cfg -
 
 make_init.py 无命令行参数且仅依赖 stdlib；网格、粒子坐标、速度图样和输出路径直接改文件顶部。
 转换和 verify_vtk.py 必须使用 pvpython。
+fpd2vtk.py 可重复运行（产物齐全的文件跳过、.pvd 与已有索引增量合并），故能边下载边转换。
+并行进程数 `-j` 默认按可用内存自动定，运行前后各打印一行内存估算与实测。
 .fpd 不保存压力，压力仅在求解器内部及数值判据中使用；沉降统计需 --config。
 用户自行转换可视化，提供命令即可；ParaView 打开生成的 .pvd。
 沉降数据选择 out/sed_[0-9]*.fpd，避免包含或删除 sed_init.fpd。

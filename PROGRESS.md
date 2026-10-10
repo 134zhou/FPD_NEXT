@@ -921,3 +921,48 @@ plan 时以错误 5 中止。因此 W3b/W5b 和无噪声检查点逐位对照仍
 `--check-config`、`--check-potential`、`--check-tridiag` 全部通过。未修改
 数值内核，本次不重跑 GPU 数值判据。计划和结果见
 `baseline/cmake_split_20260927/`。
+
+## 转换器增量化与并行化，并按内存预算限额（2026-10-10）
+
+`tools/fpd2vtk.py` 为「一边下载 808 MB/个 的存档、一边转可视化」的工作流改了三件事，
+并修掉由此引出的一次 OOM。
+
+**增量**：产物齐全（`.vtp`/`.vti`/`.vtm`，`--particles-only` 只看 `.vtp`）的文件直接跳过，
+不再读那几百 MB 重算；`.pvd` 与已有索引按产物名合并而非覆盖。产物一律先写 `<name>.tmp`
+再原子改名 —— 直接写最终名的话，中途被打断会留下半截 `.vti`，而下一轮只看「文件在不在」，
+那个半截文件会被永远跳过，在 ParaView 里是个静默坏文件。跳过的文件仍读一次 40 字节 header
+把条目补进 pvd，因此上一轮若在写 pvd 前被杀，下一轮能自愈。
+
+**并行**：`imap_unordered` 每文件一个任务，用 `spawn` 而非默认 fork —— numpy 的 OpenBLAS
+在 import 时就建了线程池，父进程因而是多线程的，而 fork 只复制调用线程，Python 3.12 会直接报
+`use of fork() may lead to deadlocks in the child`。本仓库一贯不赌这类无诊断故障。
+
+**事故与修正**：首版 `default_jobs` 只按「可用内存 ÷ 单 worker 峰值」算，在这台机器上给出
+**7**，而单 worker 处理 512×512×128 的峰值实测 2.73 GB ⇒ 约 19 GB，把 31 GB 的机器压垮
+（VS Code 被杀）。三处修正：
+
+1. **降单 worker 峰值 72 → 36 B/格点**。原写法里三个 float64 源场、`cx/cy/cz`、深拷的 `vel`
+   同时活着。改为逐分量插值、算完一个就 `pop` 掉它的源场（MAC 约定抽成 `center_component`，
+   `stagger_to_center` 退化为薄包装，`verify_vtk.py` 不受影响），并把 `numpy_to_vtk` 改成
+   `deep=0`。实测 2,732,640 KB → **1,548,076 KB**，耗时 14.1 s → 9.5 s。
+   ⚠️ `deep=0` 不悬空的依据是 numpy_support 把引用挂在 vtkBuffer 上（不是「`vel` 是局部变量」），
+   反面是这块内存要等 `img`/`va` 销毁才还。
+2. **默认并行度只用一半可用内存并留 4 GiB** 给桌面，另一半给页缓存 —— 输入 808 MB/个、
+   输出 `.vti` 实测 373 MB/个（**不是**小文件；我一度用全零测试文件看到 688 KB 是假象），
+   页缓存被挤掉时吞吐掉得比多开进程赚回来的多。生产网格因此得 5 个进程。
+3. **运行时自证**：运行前打印估算、运行后打印 `RUSAGE_CHILDREN.ru_maxrss` 实测。上次事故
+   之所以无声，就是因为没有任何地方报告内存。
+
+`MEM_PER_CELL = 50` 与 `write_vti` 的内存写法**绑定**（真值 36）：只改并行度不改 `write_vti`
+会把估算压小、把 `jobs` 抬高，正是事故方向，两者必须同一次改。
+
+验收：808 MB 真实档案的 `.vti/.vtp/.vtm/.pvd` 与改前**逐字节一致**；32³ 真实数据
+（`baseline/io_v3_20260921/after/bulk_*`）改前改后逐字节一致；`--self-test` 全 PASS；
+`verify_vtk.py` 往返 `velocity` 相对差 0.000e+00；增量重跑全跳过且 `.pvd` md5 不变。
+模型估算 1.95 GiB vs 实测 1.48 GiB，偏高约三成（安全侧）—— 5 个进程合计约 7.4 GiB，
+估算即便错一倍也只会变慢，不会 OOM。
+
+按 AGENTS.md「发现方案有误先更新计划」：原方案打算给 `stagger_to_center` 加 `out=` 形参并
+「写完分量再 pop」，但那个结构下 `stagger_to_center` 返回时源场与结果同时活着，pop 发生在
+峰值之后，省不到东西（真值约 2.2 GB 而非我估的 1.7 GB）；`deep=0` 的安全依据也记错过。
+修正记录见 `.claude/plans/abundant-jumping-feather.md`。
