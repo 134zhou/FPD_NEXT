@@ -29,6 +29,7 @@ import multiprocessing as mp
 import os
 import resource
 import sys
+import time
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -122,6 +123,28 @@ def mem_estimate(ncells):
 def gib(nbytes):
     """字节 -> 可读 GiB；读不到给「未知」。"""
     return "未知" if nbytes is None else "%.2f GiB" % (nbytes / 2 ** 30)
+
+
+def mmss(sec):
+    """秒 -> m:ss（超过一小时给 h:mm:ss）。"""
+    sec = int(sec)
+    if sec >= 3600:
+        return "%d:%02d:%02d" % (sec // 3600, sec % 3600 // 60, sec % 60)
+    return "%d:%02d" % (sec // 60, sec % 60)
+
+
+def progress_line(done, total, n_new, n_skip, t0, width=24):
+    """进度条单行文本（不含 \\r 等控制字符）。
+
+    ETA 按「已完成 / 已用时间」线性外推。跳过是瞬时的、转换要几十秒，两者混在
+    一起使它只是粗略值 —— 剩余文件里有多少是要真转的，读 header 之前无法知道。
+    """
+    el = time.time() - t0
+    filled = int(width * done / total) if total else width
+    eta = el * (total - done) / done if done else 0.0
+    return "[%s%s] %d/%d %d%%  转换 %d  跳过 %d  已用 %s  剩余 %s" % (
+        "#" * filled, "-" * (width - filled), done, total, 100 * done // total,
+        n_new, n_skip, mmss(el), mmss(eta))
 
 
 def default_jobs(ncells):
@@ -389,7 +412,11 @@ def main():
           % (jobs, len(files), gib(mem_available()), gib(mem_estimate(ncells))))
 
     entries = {}          # {产物名: 物理时间}，本次转换的和跳过的都记进来
-    n_new = n_skip = 0
+    n_new = n_skip = done = 0
+    # 交互终端上画单行进度条原地刷新；重定向到日志时改回逐文件一行 —— 日志里塞
+    # \r 控制字符会把日志毁掉，而这些行本来就是日志要看的东西。
+    live = sys.stdout.isatty()
+    t0 = time.time()
     work = [(p, a.out, a.particles_only) for p in files]
     # 用 spawn 而不是默认的 fork：numpy 的 OpenBLAS 在 import 时就建了线程池，
     # 父进程因而是多线程的，而 fork 只复制调用线程 —— Python 3.12 会直接报
@@ -406,13 +433,23 @@ def main():
         # 单个文件本来就够大，再批就是纯拖延。
         for name, step, skipped, bname in pool.imap_unordered(convert_file, work, chunksize=1):
             entries[name] = step * dt
+            done += 1
             if skipped:
                 n_skip += 1
-                print("  跳过 %s（产物已存在）" % bname)
             else:
                 n_new += 1
-                print("  %s -> %s%s" % (bname, name, "" if a.particles_only else " (+ .vti/.vtp)"))
+            if live:
+                # 行尾 \x1b[K 擦到行末：秒数从 0:05 长到 1:00:00 或缩短时不留残影。
+                sys.stdout.write("\r" + progress_line(done, len(files), n_new, n_skip, t0)
+                                 + "\x1b[K")
+            elif skipped:
+                sys.stdout.write("  跳过 %s（产物已存在）\n" % bname)
+            else:
+                sys.stdout.write("  %s -> %s%s\n"
+                                 % (bname, name, "" if a.particles_only else " (+ .vti/.vtp)"))
             sys.stdout.flush()
+    if live and done:
+        sys.stdout.write("\n")      # 给进度条那行收尾，免得后续输出挤在同一行
 
     # 单 worker 峰值 RSS 实测。Linux 的 ru_maxrss 单位是 KiB，取所有已回收子进程
     # 里最大的那个；必须在 with 块之后读，Pool 退出时会 join 全部 worker。
