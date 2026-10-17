@@ -5,6 +5,7 @@ add_library(fpd_core STATIC
     Force.cpp
     Viscosity.cpp
     Velocity.cpp
+    Mass.cpp
     Config.cpp
     IOBin.cpp
     State.cpp

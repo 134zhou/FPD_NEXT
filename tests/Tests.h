@@ -41,4 +41,14 @@ int run_check_poisson(int Nx, int Ny, int Nz);
 // Nx<=0 时用内置盒子（16³）。
 int run_check_wall(int Nx, int Ny, int Nz);
 
+// 质量密度场判据（需 GPU）：
+//   MA1 面心 1/rho 与独立 CPU 暴力枚举逐点对照
+//   MA2 sum_faces(1/a-1) = d_rho * sum_n S1（三方向）
+//   MA3 深内部 a=1/rho_p、纯流体 a=1.0
+//   MA4 重力体力总和与流体区逐位零
+//   MA5 N=0 恒等 / MA6 ratio_rho=1 恒等
+//   MA7 壁面平衡：F_wall(z_rest) + d_rho*S1z(z_rest)*g_z = 0
+// Nx<=0 时用内置盒子（32³）。
+int run_check_mass(int Nx, int Ny, int Nz);
+
 #endif

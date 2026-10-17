@@ -22,12 +22,13 @@ static void check(bool ok, const char* what)
 
 // CPU 参考实现：串行 i<j 半矩阵。用于 ΣF 判据与 N=3 解析对照（与 GPU 的
 // compute_particle_forces 是两份独立实现，各自验证装配逻辑）。
-static void forces_cpu(const PotentialParams& pot, const ExternalField& ext,
+// 只装粒子对势；重力是体力，不在这里。
+static void forces_cpu(const PotentialParams& pot,
                        int N, double Lx, double Ly, double Lz,
                        const double* Rx, const double* Ry, const double* Rz,
                        double* Fx, double* Fy, double* Fz)
 {
-    for (int n = 0; n < N; n++) { Fx[n] = ext.gx; Fy[n] = ext.gy; Fz[n] = ext.gz; }
+    for (int n = 0; n < N; n++) { Fx[n] = 0.0; Fy[n] = 0.0; Fz[n] = 0.0; }
     for (int i = 0; i < N; i++)
         for (int j = i + 1; j < N; j++)
         {
@@ -153,8 +154,6 @@ static void check_n3_triangle()
     // WCA eps=1 sigma=7.4，边长 6.0，放在 32^3 盒心
     PotentialParams pot = make_potential_params(POT_WCA, SHIFT_ENERGY,
                                                 1.0, 7.4, 0, 0, 0, 0);
-    ExternalField ext{0, 0, 0};
-
     const double R = 6.0 / sqrt(3.0);
     const double cx = 16.0, cy = 16.0, cz = 16.0;
     double Rx[3], Ry[3], Rz[3], Fx[3], Fy[3], Fz[3];
@@ -163,7 +162,7 @@ static void check_n3_triangle()
         const double ang = (90.0 + 120.0 * i) * M_PI / 180.0;
         Rx[i] = cx + R * cos(ang); Ry[i] = cy + R * sin(ang); Rz[i] = cz;
     }
-    forces_cpu(pot, ext, 3, 32.0, 32.0, 32.0, Rx, Ry, Rz, Fx, Fy, Fz);
+    forces_cpu(pot, 3, 32.0, 32.0, 32.0, Rx, Ry, Rz, Fx, Fy, Fz);
 
     const double F_expected = 147.25519213042094;   // |F_pair|*sqrt(3)
     bool ok = true;
@@ -208,27 +207,26 @@ static void check_feature_points()
         check(std::fabs(pair_energy(pot, rcut*rcut)) < 1e-14, "J6 WCA: U(rcut) = 0");
         check(std::fabs(pair_force_over_r(pot, rcut*rcut)) < 1e-14, "J6 WCA: F(rcut) → 0");
     }
-    // POT_NONE：F 逐位等于外场，U ≡ 0
+    // POT_NONE：没有粒子对势、也没有壁面势 ⇒ F 逐位为 0，U ≡ 0
+    // （重力已改为体力，不再进力装配；重力的判据在 --check-mass 的 MA4/MA7）
     {
         PotentialParams pot = make_potential_params(POT_NONE, SHIFT_ENERGY, 0, 0, 0, 0, 0, 0);
-        ExternalField ext{1.0, -2.0, 3.0};
         double Rx[1]{5.0}, Ry[1]{6.0}, Rz[1]{7.0}, Fx[1], Fy[1], Fz[1];
-        forces_cpu(pot, ext, 1, 32, 32, 32, Rx, Ry, Rz, Fx, Fy, Fz);
-        const bool none_ok = (Fx[0] == 1.0 && Fy[0] == -2.0 && Fz[0] == 3.0);
-        check(none_ok, "J6 POT_NONE: F 逐位等于外场，U ≡ 0");
+        forces_cpu(pot, 1, 32, 32, 32, Rx, Ry, Rz, Fx, Fy, Fz);
+        const bool none_ok = (Fx[0] == 0.0 && Fy[0] == 0.0 && Fz[0] == 0.0);
+        check(none_ok, "J6 POT_NONE: F 逐位为 0，U ≡ 0（重力不在装配里）");
     }
     // 标号交换对称性：N=3 任意构型，交换 0/1 标号后力按标号交换逐位相同
     {
         PotentialParams pot = make_potential_params(POT_LJ126, SHIFT_ENERGY,
                                                     57.1428571429, 7.4, 0, 0, 0, 15.0);
-        ExternalField ext{0, 0, 0};
         double Rx[3]{5.0, 20.0, 3.0}, Ry[3]{1.0, 2.0, 25.0}, Rz[3]{10.0, 11.0, 12.0};
         double Fx[3], Fy[3], Fz[3];
-        forces_cpu(pot, ext, 3, 32, 32, 32, Rx, Ry, Rz, Fx, Fy, Fz);
+        forces_cpu(pot, 3, 32, 32, 32, Rx, Ry, Rz, Fx, Fy, Fz);
 
         double Rx2[3]{20.0, 5.0, 3.0}, Ry2[3]{2.0, 1.0, 25.0}, Rz2[3]{11.0, 10.0, 12.0};
         double Fx2[3], Fy2[3], Fz2[3];
-        forces_cpu(pot, ext, 3, 32, 32, 32, Rx2, Ry2, Rz2, Fx2, Fy2, Fz2);
+        forces_cpu(pot, 3, 32, 32, 32, Rx2, Ry2, Rz2, Fx2, Fy2, Fz2);
 
         const bool sym = (Fx[0] == Fx2[1] && Fy[0] == Fy2[1] && Fz[0] == Fz2[1] &&
                           Fx[1] == Fx2[0] && Fy[1] == Fy2[0] && Fz[1] == Fz2[0] &&
@@ -247,7 +245,6 @@ static void check_sum_zero()
 {
     PotentialParams pot = make_potential_params(POT_LJ126, SHIFT_ENERGY,
                                                 57.1428571429, 7.4, 0, 0, 0, 15.0);
-    ExternalField ext{0, 0, 0};
     const int N = 8;
     double Rx[N], Ry[N], Rz[N], Fx[N], Fy[N], Fz[N];
     for (int i = 0; i < N; i++)
@@ -256,7 +253,7 @@ static void check_sum_zero()
         Ry[i] = (double)((i * 53) % 31) + 0.3;
         Rz[i] = (double)((i * 71) % 27) + 0.7;
     }
-    forces_cpu(pot, ext, N, 32, 32, 32, Rx, Ry, Rz, Fx, Fy, Fz);
+    forces_cpu(pot, N, 32, 32, 32, Rx, Ry, Rz, Fx, Fy, Fz);
     double sx = 0, sy = 0, sz = 0, fmax = 0;
     for (int i = 0; i < N; i++)
     {

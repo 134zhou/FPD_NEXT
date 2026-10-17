@@ -26,13 +26,15 @@ struct FpdConstants
     double int_phi[3];        // Sum phi_alpha
     double int_phi2[3];       // Sum phi_alpha^2
     double lambda_T[3];       // lambda^T = int(phi) / int(phi^2)
-    double mass[3];           // M_i = rho (int phi)^2 / int(phi^2)   (rho = dV = 1)
+    double mass_i[3];         // M_i = int(rho phi) = S1 + (ratio_rho-1) S2
+    double mass[3];           // M_eq = (int phi)^2 / int(phi^2) = lambda^T M_i（rho=1）
     double mass_eff[3];       // M_eff = 1.5 M_i（附加质量）
+    double ratio_rho;         // rho_p / rho_l（只影响 M_i / M_eff 的换算）
 
     // 三方向一致性
     double spread_int_phi;    // (max-min)/min
     double spread_int_phi2;   // 交错混叠的一阶体检
-    double spread_mass;
+    double spread_mass;       // M_eq 的三方向散布
 
     // 亚格点扫描（格胞内 n_scan^3 个偏移）
     int    n_scan;
@@ -42,7 +44,8 @@ struct FpdConstants
 
 // 用与模拟【同一个】 stencil_point 做离散求和。纯 CPU，一次性调用。
 // 在 (Rx,Ry,Rz) 求主值，另在格胞内扫 n_scan^3 个偏移给误差带。
-FpdConstants compute_fpd_constants(PhiParams pp, NS_Config cfg,
+// ratio_rho = rho_p/rho_l，只用于把 S1、S2 换算成 M_i 与 M_eff。
+FpdConstants compute_fpd_constants(PhiParams pp, NS_Config cfg, double ratio_rho,
                                    double Rx, double Ry, double Rz, int n_scan);
 
 // 打印常量表，并与连续球坐标积分、扩散界面解析展开对照

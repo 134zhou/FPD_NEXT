@@ -79,14 +79,24 @@ int main(int argc, char** argv)
         return run_check_wall(Px, Py, Pz);
     }
 
-    // 常量表：--lambda [L]   （纯 CPU，秒级）
+    // 质量密度场判据：需 GPU
+    if (argc > 1 && std::strcmp(argv[1], "--check-mass") == 0)
+    {
+        const int Px = (argc > 2) ? std::atoi(argv[2]) : 0;
+        const int Py = (argc > 3) ? std::atoi(argv[3]) : 0;
+        const int Pz = (argc > 4) ? std::atoi(argv[4]) : 0;
+        return run_check_mass(Px, Py, Pz);
+    }
+
+    // 常量表：--lambda [L] [ratio_rho]   （纯 CPU，秒级）
     if (argc > 1 && std::strcmp(argv[1], "--lambda") == 0)
     {
         const int L_ = (argc > 2) ? std::atoi(argv[2]) : 32;
+        const double r_rho = (argc > 3) ? std::atof(argv[3]) : 1.0;
         // ⚠️ L 必须大到测试粒子离两壁 >= range（相场模板盒的 z 向截断），
         //    否则量到的是「被壁面截断的支撑域」而不是体相值。默认 32 足够。
         NS_Config c2 = make_ns_config(L_, L_, L_, dt, kT, noise_on);
-        FpdConstants fc = compute_fpd_constants(pp, c2,
+        FpdConstants fc = compute_fpd_constants(pp, c2, r_rho,
                                                 L_/2.0 + 0.3, L_/2.0 + 0.7, L_/2.0 + 0.5, 4);
         print_fpd_constants(fc, pp);
         return 0;
@@ -98,6 +108,7 @@ int main(int argc, char** argv)
               << "      fpd_check --check-tridiag\n"
               << "      fpd_check --check-poisson [Nx Ny Nz]\n"
               << "      fpd_check --check-wall [Nx Ny Nz]\n"
-              << "      fpd_check --lambda [L]\n";
+              << "      fpd_check --check-mass [Nx Ny Nz]\n"
+              << "      fpd_check --lambda [L] [ratio_rho]\n";
     return 2;
 }

@@ -20,10 +20,11 @@ std::vector<FieldDesc> config_fields(FpdConfig& c)
         {"radius",         F_DOUBLE, &c.radius,         true,  "粒子半径 a"},
         {"xi",             F_DOUBLE, &c.xi,             true,  "界面宽度 xi"},
         {"ratio_eta",      F_DOUBLE, &c.ratio_eta,      true,  "eta_c / eta_l"},
+        {"ratio_rho",      F_DOUBLE, &c.ratio_rho,      true,  "rho_p / rho_l（粒子/溶剂质量密度比）"},
 
-        {"gravity_z",      F_DOUBLE, &c.gravity_z,      false, "z 向外场力（每粒子）"},
-        {"gravity_x",      F_DOUBLE, &c.gravity_x,      false, "x 向外场力（每粒子）"},
-        {"gravity_y",      F_DOUBLE, &c.gravity_y,      false, "y 向外场力（每粒子）"},
+        {"gravity_z",      F_DOUBLE, &c.gravity_z,      false, "z 向重力加速度（体力=rho*g，净体密度=(rho-rho_l)*g）"},
+        {"gravity_x",      F_DOUBLE, &c.gravity_x,      false, "x 向重力加速度（体力=rho*g，净体密度=(rho-rho_l)*g）"},
+        {"gravity_y",      F_DOUBLE, &c.gravity_y,      false, "y 向重力加速度（体力=rho*g，净体密度=(rho-rho_l)*g）"},
         {"noise_on",       F_INT,    &c.noise_on,       false, "0/1，关掉则 W=0"},
 
         {"potential",      F_STRING, &c.potential,      false, "粒子间势: none|wca|morse|lj126"},
@@ -324,9 +325,19 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
         ofs << "#   U(rcut) = " << wp.pot.u_at_rc << "   U'(rcut) = " << wp.pot.dudr_at_rc << "\n";
     }
     ExternalField ext = make_external_field(c);
+    ofs << "# derived rho_p/rho_l = " << c.ratio_rho << "\n";
+    ofs << "# derived d_rho      = " << (c.ratio_rho - 1.0) << "   (= rho_p/rho_l - 1)\n";
+    ofs << "# derived density_on = " << ns.density_on
+        << "   (1: 压力方程 div((1/rho)grad p)=b，PCG；0: 常系数直解)\n";
+    if (ns.density_on)
+    {
+        ofs << "# derived PCG tol    = 1e-12 (相对残差)   上限 200 次\n";
+    }
     if (ext.gx != 0.0 || ext.gy != 0.0 || ext.gz != 0.0)
     {
-        ofs << "# external_field  = (" << ext.gx << ", " << ext.gy << ", " << ext.gz << ")\n";
+        ofs << "# 重力加速度 g   = (" << ext.gx << ", " << ext.gy << ", " << ext.gz << ")\n";
+        ofs << "#   净重力体密度 = (rho - rho_l)*g = d_rho * sum(phi) * g\n";
+        ofs << "#   等净力换算：g_new = F_old / (d_rho * int(phi))\n";
     }
     return true;
 }
@@ -344,7 +355,9 @@ void print_config_help()
 
 NS_Config make_ns_config(const FpdConfig& c)
 {
-    return make_ns_config(c.Nx, c.Ny, c.Nz, c.dt, c.kT, c.noise_on != 0);
+    NS_Config cfg = make_ns_config(c.Nx, c.Ny, c.Nz, c.dt, c.kT, c.noise_on != 0);
+    cfg.density_on = (c.ratio_rho != 1.0) ? 1 : 0;
+    return cfg;
 }
 
 PhiParams make_phi_params(const FpdConfig& c)

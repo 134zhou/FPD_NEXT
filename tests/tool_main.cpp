@@ -197,10 +197,9 @@ static int cmd_verify_forces(const char* ckpt_path, const char* cfg_path)
     NS_Config cfg = make_ns_config(fc);
     PotentialParams pot = make_potential_params(fc);
     WallParams wall = make_wall_params(fc);
-    ExternalField ext = make_external_field(fc);
 
     std::vector<double> Fx(h.N), Fy(h.N), Fz(h.N);
-    compute_particle_forces_cpu(cfg, pot, ext, wall, h.N,
+    compute_particle_forces_cpu(cfg, pot, wall, h.N,
                                 holder.Rx.data(), holder.Ry.data(), holder.Rz.data(),
                                 Fx.data(), Fy.data(), Fz.data());
 
@@ -219,8 +218,9 @@ static int cmd_verify_forces(const char* ckpt_path, const char* cfg_path)
     const bool ok = maxabs < tol;
 
     printf("=== verify-forces %s ===\n", ckpt_path);
-    printf("  势 = %s   壁面势 = %s   外场 = (%g, %g, %g)   N = %d\n",
-           fc.potential.c_str(), fc.wallpotential.c_str(), ext.gx, ext.gy, ext.gz, h.N);
+    printf("  势 = %s   壁面势 = %s   N = %d\n",
+           fc.potential.c_str(), fc.wallpotential.c_str(), h.N);
+    printf("  文件里的 F 只含势 + 壁面力（重力是体力，不在这里重算）；\n");
     printf("  重算 F vs 文件 F: max |ΔF| = %.3e   阈值 %.3e   %s\n",
            maxabs, tol, ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;

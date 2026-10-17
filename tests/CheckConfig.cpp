@@ -15,7 +15,7 @@ int run_config_check()
     close(fd);
     const std::string base =
         "init_file=test.fpd\ndt=0.002\nn_steps=200\n"
-        "kT=0.25\nradius=3.2\nxi=1\nratio_eta=50\n";
+        "kT=0.25\nradius=3.2\nxi=1\nratio_eta=50\nratio_rho=2\n";
     std::string err;
     int fails = 0;
     auto check = [&](bool ok, const char* name)
@@ -42,6 +42,17 @@ int run_config_check()
     check(load(base.substr(base.find('\n') + 1), c) && !validate_config(c, err) &&
           err.find("init_file") != std::string::npos,
           "init_file 缺失报错");
+    {
+        // ratio_rho 是与 ratio_eta 同级的物理必填项：缺了要响亮失败，
+        // 不能静默按 rho_p = rho_l 跑。
+        std::string no_rho = base;
+        const std::string key = "ratio_rho=2\n";
+        const size_t pos = no_rho.find(key);
+        no_rho.erase(pos, key.size());
+        check(load(no_rho, c) && !validate_config(c, err) &&
+              err.find("ratio_rho") != std::string::npos,
+              "ratio_rho 缺失报错");
+    }
     check(load(base + "dt=0.003\n", c) && c.dt == 0.003 &&
           apply_override(c, "dt=0.004", err) && c.dt == 0.004,
           "重复键最后生效，--set 最后覆盖");

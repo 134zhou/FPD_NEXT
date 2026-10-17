@@ -89,7 +89,7 @@ int run_force_conservation_check(NS_Config cfg, PhiParams pp)
     // 上面只检了 Σφ_α（那只是 k=0 分量）。由 Parseval，Σ_k|φ̂_α(k)|² = N_g·Σ_r φ_α²，
     // 所以 Σφ_α² 的三方向一致性才是混叠的直接判据 —— 这是曾经漏掉的那一半。
     {
-        FpdConstants fc = compute_fpd_constants(pp, cfg, 64.3, 32.7, 16.5, 4);
+        FpdConstants fc = compute_fpd_constants(pp, cfg, 1.0, 64.3, 32.7, 16.5, 4);
         const bool a_ok = (fc.spread_int_phi2 < 1e-4);
         const bool s_ok = (fc.spread_subgrid  < 0.01);
         if (!a_ok) { failures++; }
@@ -98,7 +98,7 @@ int run_force_conservation_check(NS_Config cfg, PhiParams pp)
                   << "  交错混叠  Σφ² 三方向散布 = " << fc.spread_int_phi2
                   << "   " << (a_ok ? "PASS" : "FAIL") << "\n"
                   << std::fixed << std::setprecision(4)
-                  << "  系统误差下限  M_i 亚格点散布 = " << fc.spread_subgrid*100.0
+                  << "  系统误差下限  M_eq 亚格点散布 = " << fc.spread_subgrid*100.0
                   << "%   " << (s_ok ? "PASS" : "FAIL") << "\n";
     }
 
@@ -214,7 +214,7 @@ int run_force_pipeline_check(NS_Config cfg, PhiParams pp)
 
     PotentialParams pot = make_potential_params(POT_LJ126, SHIFT_ENERGY,
                                                 57.1428571429, 7.4, 0, 0, 0, 15.0);
-    ExternalField ext{1.0, -2.0, 3.0};
+    // 重力已改为体力，不再进力装配；这里只测势 + 壁面力的装配与投影。
 
     FpdState st;
     st.init(cfg, N, ST_STENCIL, 0);
@@ -231,12 +231,12 @@ int run_force_pipeline_check(NS_Config cfg, PhiParams pp)
     std::cout << std::scientific << std::setprecision(3);
 
     // (a)+(b) GPU 算两次逐位 + 与 CPU 参考对照
-    compute_particle_forces(cfg, pot, ext, no_wall(), N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz);
+    compute_particle_forces(cfg, pot, no_wall(), N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz);
     st.download(ST_PARTICLE);
     double g0x[N], g0y[N], g0z[N];
     for (int n = 0; n < N; n++) { g0x[n] = st.Fx[n]; g0y[n] = st.Fy[n]; g0z[n] = st.Fz[n]; }
 
-    compute_particle_forces(cfg, pot, ext, no_wall(), N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz);
+    compute_particle_forces(cfg, pot, no_wall(), N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz);
     st.download(ST_PARTICLE);
     bool bitwise = true;
     for (int n = 0; n < N && bitwise; n++)
@@ -245,7 +245,7 @@ int run_force_pipeline_check(NS_Config cfg, PhiParams pp)
     }
 
     double cFx[N], cFy[N], cFz[N];
-    compute_particle_forces_cpu(cfg, pot, ext, no_wall(), N, st.Rx, st.Ry, st.Rz, cFx, cFy, cFz);
+    compute_particle_forces_cpu(cfg, pot, no_wall(), N, st.Rx, st.Ry, st.Rz, cFx, cFy, cFz);
     double fmax = 0.0, relmax = 0.0;
     for (int n = 0; n < N; n++)
     {

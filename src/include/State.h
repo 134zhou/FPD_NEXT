@@ -56,25 +56,32 @@ struct FpdState
     std::vector<double> h_sum_phix, h_sum_phiy, h_sum_phiz;
     std::vector<double> h_fx, h_fy, h_fz;
     std::vector<double> h_eta, h_etaXY, h_etaYZ, h_etaZX;
+    // 面心反密度 1/rho（Mass.cpp 从 R 重算；density_on=0 时恒为 1.0）。
+    // 不属于 .fpd：它是派生量，重启时由 R 重算。
+    std::vector<double> h_inv_rho_x, h_inv_rho_y, h_inv_rho_z;
     std::vector<double> h_vx, h_vy, h_vz, h_p;
     std::vector<double> h_pi_dx, h_pi_dy, h_pi_dz, h_pi_nx, h_pi_ny, h_pi_nz;
     std::vector<double> h_tmp_fx, h_tmp_fy, h_tmp_fz;
     std::vector<double> h_fft, h_randD, h_randN;
+    // 变系数压力求解的 PCG 暂存（density_on=1 才分配）。
+    std::vector<double> h_cg_r, h_cg_s, h_cg_zq;
     std::vector<double> h_tri_w;                    // z 向三对角前推系数
-    std::vector<double> h_diag;                     // 长度 1：(0,0) 列相容性残差 |Σb̂|
+    std::vector<double> h_diag;                     // 长度 2：|Σb| 与 PCG 最终相对残差
 
     // --- 裸指针视图（= vector::data()，kernel 参数用）---
     double *Rx=0,*Ry=0,*Rz=0, *Rux=0,*Ruy=0,*Ruz=0;
     double *Vx=0,*Vy=0,*Vz=0, *Fx=0,*Fy=0,*Fz=0;
     double *sum_phix=0,*sum_phiy=0,*sum_phiz=0;
     double *fx=0,*fy=0,*fz=0;
+    double *inv_rho_x=0,*inv_rho_y=0,*inv_rho_z=0;
     double *eta=0,*etaXY=0,*etaYZ=0,*etaZX=0;
     double *vx=0,*vy=0,*vz=0,*p=0;
     double *pi_dx=0,*pi_dy=0,*pi_dz=0, *pi_nx=0,*pi_ny=0,*pi_nz=0;
     double *tmp_fx=0,*tmp_fy=0,*tmp_fz=0;
     double *fft=0,*randD=0,*randN=0;
+    double *cg_r=0,*cg_s=0,*cg_zq=0;                // PCG 暂存（density_on=0 时为 null）
     double *tri_w=0;                                // z 向三对角系数
-    double *diag=0;                                 // 长度 1 的诊断量（见 Poisson.h）
+    double *diag=0;                                 // 长度 2（见 Poisson.h）
 
     cufftHandle       plan_xy = 0;                  // xy 向 2D 批量 FFT 计划（batch=Nz）
     curandGenerator_t gen  = 0;

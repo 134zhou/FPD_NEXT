@@ -1,9 +1,12 @@
 #include <cstdio>
 #include <cmath>
 #include <vector>
+#include <string>
 
 #include "Poisson.h"
 #include "State.h"
+#include "Stokes.h"
+#include "Viscosity.h"
 #include "Tests.h"
 #include "Check.h"
 
@@ -343,6 +346,196 @@ static void check_compat_diag()
 }
 
 // ============================================================================
+// 变系数投影判据 V1-V5（需 GPU）
+//
+// a 场用解析函数（高斯或球），不依赖 Mass.cpp —— 这样「算子/PCG」与「密度场」
+// 是两套独立判据，各自能被单独判死。
+// ============================================================================
+static void build_var_a(std::vector<double>& a, int loc, NS_Config cfg,
+                        double amp, double sigma, bool piecewise, double R)
+{
+    const int Nx = cfg.Nx, Ny = cfg.Ny, Nz = cfg.Nz;
+    const double cx = 0.5 * Nx, cy = 0.5 * Ny, cz = 0.5 * Nz;
+    const double ox = (loc == 0) ? 0.5 : 0.0;
+    const double oy = (loc == 1) ? 0.5 : 0.0;
+    const double oz = (loc == 2) ? 0.5 : 0.0;
+    a.assign((size_t)Nx * Ny * Nz, 1.0);
+    for (int k = 0; k < Nz; k++)
+        for (int j = 0; j < Ny; j++)
+            for (int i = 0; i < Nx; i++)
+            {
+                const double dx = (double)i + ox - cx;
+                const double dy = (double)j + oy - cy;
+                const double dz = (double)k + oz - cz;
+                const double r2 = dx * dx + dy * dy + dz * dz;
+                const double phi = piecewise ? ((r2 <= R * R) ? 1.0 : 0.0)
+                                             : std::exp(-r2 / (2.0 * sigma * sigma));
+                a[(size_t)IDX(i, j, k)] = 1.0 / (1.0 + amp * phi);
+            }
+}
+
+static double dot_host(const std::vector<double>& x, const std::vector<double>& y)
+{
+    double s = 0.0;
+    for (size_t t = 0; t < x.size(); t++) { s += x[t] * y[t]; }
+    return s;
+}
+
+// 用给定的 a 场跑一遍「往返 + 对称 + 修正步散度」。
+static void var_poisson_battery(int Nx, int Ny, int Nz, const char* tag,
+                                double amp, double sigma, bool piecewise, double R)
+{
+    const size_t size = (size_t)Nx * Ny * Nz;
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.002, 0.0, false);
+    cfg.density_on = 1;
+    PhiParams pp = make_phi_params(3.2, 1.0, 50.0);
+
+    FpdState st;
+    st.init(cfg, 0, ST_FULL, 20261017ULL);
+
+    std::vector<double> ax, ay, az;
+    build_var_a(ax, 0, cfg, amp, sigma, piecewise, R);
+    build_var_a(ay, 1, cfg, amp, sigma, piecewise, R);
+    build_var_a(az, 2, cfg, amp, sigma, piecewise, R);
+    for (size_t t = 0; t < size; t++)
+    { st.h_inv_rho_x[t] = ax[t]; st.h_inv_rho_y[t] = ay[t]; st.h_inv_rho_z[t] = az[t]; }
+    #pragma acc update device(st.inv_rho_x[0:size], st.inv_rho_y[0:size], st.inv_rho_z[0:size])
+
+    // --- V1：L * 1 = 0（逐位）---
+    {
+        std::vector<double> one(size, 1.0), out(size);
+        for (size_t t = 0; t < size; t++) { st.h_p[t] = 1.0; }
+        #pragma acc update device(st.p[0:size])
+        apply_laplacian_var(cfg, st.inv_rho_x, st.inv_rho_y, st.inv_rho_z, st.p, st.cg_r);
+        #pragma acc update self(st.cg_r[0:size])
+        double mx = 0.0;
+        for (size_t t = 0; t < size; t++) { mx = std::fmax(mx, std::fabs(st.cg_r[t])); }
+        check(mx == 0.0, (std::string("V1 ") + tag + "：L*1 = 0（逐位）").c_str());
+    }
+
+    // --- V2：对称性 (Lp,q) = (p,Lq) ---
+    {
+        std::vector<double> p(size), q(size);
+        fill_rand(p, 111u + (unsigned)amp * 7u);
+        fill_rand(q, 222u + (unsigned)amp * 7u);
+        double pm = 0.0, qm = 0.0;
+        for (size_t t = 0; t < size; t++) { pm += p[t]; qm += q[t]; }
+        pm /= (double)size; qm /= (double)size;
+        for (size_t t = 0; t < size; t++) { p[t] -= pm; q[t] -= qm; st.h_p[t] = p[t]; st.h_cg_s[t] = q[t]; }
+        #pragma acc update device(st.p[0:size], st.cg_s[0:size])
+        apply_laplacian_var(cfg, st.inv_rho_x, st.inv_rho_y, st.inv_rho_z, st.p, st.cg_r);   // Lp
+        apply_laplacian_var(cfg, st.inv_rho_x, st.inv_rho_y, st.inv_rho_z, st.cg_s, st.cg_zq); // Lq
+        #pragma acc update self(st.cg_r[0:size], st.cg_zq[0:size])
+        const double lhs = dot_host(std::vector<double>(st.cg_r, st.cg_r + size), q);
+        const double rhs = dot_host(p, std::vector<double>(st.cg_zq, st.cg_zq + size));
+        const double scale = std::fmax(std::fabs(lhs), std::fabs(rhs));
+        const double rel = scale > 0.0 ? std::fabs(lhs - rhs) / scale : 0.0;
+        std::printf("      %s 对称性 (Lp,q)=%.6e  (p,Lq)=%.6e  相对差 %.3e\n",
+                    tag, lhs, rhs, rel);
+        check(rel < 1e-12, (std::string("V2 ") + tag + "：变系数算子对称").c_str());
+    }
+
+    // --- V3：往返 ---
+    int iters = 0;
+    {
+        std::vector<double> pref(size);
+        fill_rand(pref, 333u + (unsigned)amp * 7u);
+        double m = 0.0;
+        for (size_t t = 0; t < size; t++) { m += pref[t]; }
+        m /= (double)size;
+        for (size_t t = 0; t < size; t++) { pref[t] -= m; st.h_p[t] = pref[t]; }
+        #pragma acc update device(st.p[0:size])
+        apply_laplacian_var(cfg, st.inv_rho_x, st.inv_rho_y, st.inv_rho_z, st.p, st.cg_r); // b = L pref
+        #pragma acc update self(st.cg_r[0:size])
+        std::vector<double> b(st.cg_r, st.cg_r + size);
+        for (size_t t = 0; t < size; t++) { st.h_cg_r[t] = b[t]; st.h_p[t] = 0.0; }
+        #pragma acc update device(st.cg_r[0:size], st.p[0:size])
+
+        // 兼容性：b 的和应 ~0
+        double bsum = 0.0;
+        for (size_t t = 0; t < size; t++) { bsum += b[t]; }
+
+        iters = solve_pressure_var(cfg, st.cg_r, st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
+                                   st.fft, st.tri_w, st.plan_xy, st.p, st.diag,
+                                   st.cg_s, st.cg_zq);
+        #pragma acc update self(st.p[0:size], st.diag[0:2])
+
+        double pm = 0.0;
+        for (size_t t = 0; t < size; t++) { pm += st.p[t] - pref[t]; }
+        pm /= (double)size;
+        double mx = 0.0, rmax = 0.0;
+        for (size_t t = 0; t < size; t++)
+        {
+            mx = std::fmax(mx, std::fabs((st.p[t] - pref[t]) - pm));
+            rmax = std::fmax(rmax, std::fabs(pref[t]));
+        }
+        const double rel = rmax > 0.0 ? mx / rmax : mx;
+        std::printf("      %s 往返：max|(p-p_ref)-mean| = %.3e   PCG 迭代 %d   |Σb|=%.2e   残差 %.2e\n",
+                    tag, rel, iters, std::fabs(bsum), st.diag[1]);
+        check(rel < 1e-10, (std::string("V3 ") + tag + "：变系数算子往返").c_str());
+        check(iters < 200 && st.diag[1] < 1e-11,
+              (std::string("V5 ") + tag + "：PCG 收敛（迭代 < 200，相对残差 < 1e-11）").c_str());
+    }
+
+    // --- V4：一步完整投影后 div v = 0 ---
+    {
+        const int size_i = (int)size;
+        std::vector<double> vx(size), vy(size), vz(size);
+        fill_rand(vx, 444u);
+        fill_rand(vy, 555u);
+        fill_rand(vz, 666u);
+        // 壁面法向面钉死
+        for (int j = 0; j < Ny; j++)
+            for (int i = 0; i < Nx; i++) { vz[(size_t)IDX(i, j, Nz - 1)] = 0.0; }
+        for (int t = 0; t < size_i; t++)
+        {
+            st.h_vx[t] = vx[t]; st.h_vy[t] = vy[t]; st.h_vz[t] = vz[t];
+            st.h_fx[t] = 0.0; st.h_fy[t] = 0.0; st.h_fz[t] = 0.0;
+        }
+        #pragma acc update device(st.vx[0:size], st.vy[0:size], st.vz[0:size], \
+                                  st.fx[0:size], st.fy[0:size], st.fz[0:size])
+
+        update_viscosity_fields(cfg, pp, 0, st.Rx, st.Ry, st.Rz,
+                                st.sum_phix, st.sum_phiy, st.sum_phiz,
+                                st.eta, st.etaXY, st.etaYZ, st.etaZX);
+
+        step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p,
+                           st.fx, st.fy, st.fz,
+                           st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
+                           st.cg_r, st.cg_s, st.cg_zq,
+                           st.eta, st.etaXY, st.etaYZ, st.etaZX,
+                           st.pi_dx, st.pi_dy, st.pi_dz,
+                           st.pi_nx, st.pi_ny, st.pi_nz,
+                           st.fft, st.plan_xy, st.tri_w, st.diag,
+                           st.gen, st.randD, st.randN,
+                           st.tmp_fx, st.tmp_fy, st.tmp_fz, 0L);
+        st.download(ST_VELOCITY);
+
+        double vmax = 0.0, dmax = 0.0;
+        for (int k = 0; k < Nz; k++)
+            for (int j = 0; j < Ny; j++)
+                for (int i = 0; i < Nx; i++)
+                {
+                    const int ijk = IDX(i, j, k);
+                    const int im = (i - 1 + Nx) % Nx;
+                    const int jm = (j - 1 + Ny) % Ny;
+                    const int km = (k - 1 + Nz) % Nz;
+                    const double div = (st.vx[ijk] - st.vx[IDX(im, j, k)])
+                                     + (st.vy[ijk] - st.vy[IDX(i, jm, k)])
+                                     + (st.vz[ijk] - st.vz[IDX(i, j, km)]);
+                    dmax = std::fmax(dmax, std::fabs(div));
+                    vmax = std::fmax(vmax, std::fmax(std::fabs(st.vx[ijk]),
+                                        std::fmax(std::fabs(st.vy[ijk]), std::fabs(st.vz[ijk]))));
+                }
+        const double rel = vmax > 0.0 ? dmax / vmax : dmax;
+        std::printf("      %s 一步投影：max|div v|/max|v| = %.3e\n", tag, rel);
+        check(rel < 1e-10, (std::string("V4 ") + tag + "：一步投影后 div v = 0").c_str());
+    }
+
+    st.finish();
+}
+
+// ============================================================================
 // --check-poisson（需 GPU）：壁面算子往返，覆盖偶/奇 Nz。
 // ============================================================================
 int run_check_poisson(int Nx, int Ny, int Nz)
@@ -360,11 +553,17 @@ int run_check_poisson(int Nx, int Ny, int Nz)
         g_fail += roundtrip_grid(6, 6, 5, "P5 壁面算子往返（奇 Nz）");
         g_fail += roundtrip_grid(16, 8, 8, "P6 壁面算子往返（中盒子）");
         check_compat_diag();
+
+        std::printf("\n--- 变系数投影（div(a grad p)）---\n");
+        var_poisson_battery(16, 16, 16, "高斯 a（amp=1, sigma=4）", 1.0, 4.0, false, 0.0);
+        var_poisson_battery(16, 16, 16, "球状 a（amp=1, R=6）",        1.0, 0.0, true, 6.0);
+        var_poisson_battery(16, 16, 16, "强对比 a（amp=3, R=5）",      3.0, 0.0, true, 5.0);
     }
     else
     {
         g_fail += roundtrip_grid(Nx, Ny, Nz, "壁面算子往返");
         check_compat_diag();
+        var_poisson_battery(Nx, Ny, Nz, "高斯 a（amp=1, sigma=4）", 1.0, 4.0, false, 0.0);
     }
 
     std::printf("\n%s\n", g_fail == 0 ? "全部通过" : "有失败项");

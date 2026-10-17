@@ -34,7 +34,7 @@ PotentialParams make_potential_params(int type, int shift,
     return pp;
 }
 
-void compute_particle_forces(NS_Config cfg, PotentialParams pot, ExternalField ext,
+void compute_particle_forces(NS_Config cfg, PotentialParams pot,
                              WallParams wall,
                              int N,
                              const double* Rx, const double* Ry, const double* Rz,
@@ -63,14 +63,14 @@ void compute_particle_forces(NS_Config cfg, PotentialParams pot, ExternalField e
             sy += g * dy;
             sz += g * dz;
         }
-        Fx[i] = ext.gx + sx;
-        Fy[i] = ext.gy + sy;
+        Fx[i] = sx;
+        Fy[i] = sy;
         // 壁面排斥：【按粒子】叠加，不进 j 归约（壁面不是粒子对）。
-        Fz[i] = ext.gz + sz + wall_force_z(wall, cfg, Rz[i]);
+        Fz[i] = sz + wall_force_z(wall, cfg, Rz[i]);
     }
 }
 
-void compute_particle_forces_cpu(NS_Config cfg, PotentialParams pot, ExternalField ext,
+void compute_particle_forces_cpu(NS_Config cfg, PotentialParams pot,
                                  WallParams wall,
                                  int N,
                                  const double* Rx, const double* Ry, const double* Rz,
@@ -83,9 +83,9 @@ void compute_particle_forces_cpu(NS_Config cfg, PotentialParams pot, ExternalFie
     // 逐粒子初始化循环里、用 wall_force_z，而 GPU 版写在 gang 循环末尾。
     for (int n = 0; n < N; n++)
     {
-        Fx[n] = ext.gx;
-        Fy[n] = ext.gy;
-        Fz[n] = ext.gz + wall_force_z(wall, cfg, Rz[n]);
+        Fx[n] = 0.0;
+        Fy[n] = 0.0;
+        Fz[n] = wall_force_z(wall, cfg, Rz[n]);
     }
     for (int i = 0; i < N; i++)
         for (int j = i + 1; j < N; j++)

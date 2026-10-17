@@ -90,6 +90,8 @@ static void run_steps(FpdState& st, PhiParams pp, int N, double bgx,
                            bgx, bgy, bgz, st.fx, st.fy, st.fz);
         step_navier_stokes(st.cfg, st.vx, st.vy, st.vz, st.p,
                            st.fx, st.fy, st.fz,
+                           st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
+                           st.cg_r, st.cg_s, st.cg_zq,
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz,
                            st.pi_nx, st.pi_ny, st.pi_nz,
@@ -262,6 +264,8 @@ static void w3b_wall_shear_flux()
 
     step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p,
                        st.fx, st.fy, st.fz,
+                       st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
+                       st.cg_r, st.cg_s, st.cg_zq,
                        st.eta, st.etaXY, st.etaYZ, st.etaZX,
                        st.pi_dx, st.pi_dy, st.pi_dz,
                        st.pi_nx, st.pi_ny, st.pi_nz,
@@ -349,6 +353,8 @@ static void w6_momentum_budget(int Nx, int Ny, int Nz)
                            gx, 0.0, gz, st.fx, st.fy, st.fz);
         step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p,
                            st.fx, st.fy, st.fz,
+                           st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
+                           st.cg_r, st.cg_s, st.cg_zq,
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz,
                            st.pi_nx, st.pi_ny, st.pi_nz,
@@ -586,6 +592,8 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
                            0.0, 0.0, 0.0, st.fx, st.fy, st.fz);
         step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p,
                            st.fx, st.fy, st.fz,
+                           st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
+                           st.cg_r, st.cg_s, st.cg_zq,
                            st.eta, st.etaXY, st.etaYZ, st.etaZX,
                            st.pi_dx, st.pi_dy, st.pi_dz,
                            st.pi_nx, st.pi_ny, st.pi_nz,
@@ -796,8 +804,9 @@ static void w8c_bulk_zero()
 }
 
 // W8d：静态力平衡。
-// z_rest 用【本文件自己的】二分反解（Config.cpp 的 wall_rest_gap 是 static，
-// 本文件根本调不到 —— 独立性是结构保证的，不是靠自觉）。
+// z_rest 用【本文件自己的】二分反解（Config.cpp 早就不再提供 wall_rest_gap，
+// 本文件也不依赖它 —— 独立性是结构保证的，不是靠自觉）。
+// gz 是给定的净重力（重心力改为体力后它不再传给力装配，只作为平衡的右端值）。
 static double w8d_solve_rest(const WallParams& w, NS_Config cfg, double gz)
 {
     auto F = [&](double z) { return gz + wall_force_z(w, cfg, z); };
@@ -853,7 +862,11 @@ static void w8d_static_balance()
           "W8d 刚度余量：半间隙处排斥 > 100×重力（不会被压穿）");
 }
 
-// W8e：GPU 与 CPU 两份装配在壁面【开启】时一致，且壁面力把重力【精确】抵掉。
+// W8e：GPU 与 CPU 两份装配在壁面【开启】时一致，并核对壁面力的符号/镜像。
+//
+// 重力已改为体力 (rho-rho_l)*g，不再进 compute_particle_forces。本判据里的 F_g
+// 是「该构型下净重力应有的值」（由 --check-mass 的 MA4/MA7 从密度场独立验证），
+// 这里只作为给定数字参与力平衡断言，不传给装配。
 //
 // 刻意把粒子间势关掉（pot = none）：粒子间力与壁面力混在一起时，前者可以大几个
 // 量级，会把后者的装配错误淹没（相对差仍小到「看起来通过」）。本判据要的就是
@@ -872,9 +885,9 @@ static void w8e_gpu_cpu_wall()
     w.pot    = make_potential_params(POT_WCA, SHIFT_ENERGY, 1.0, 2.0, 0, 0, 0, 0);
     w.radius = 3.2;
     const PotentialParams pot = no_wall().pot;      // 关掉粒子间势，隔离壁面项
-    const ExternalField   ext{0.0, 0.0, -10.0};
+    const double F_g = -10.0;                       // 给定的净重力（不含在装配里）
 
-    const double z_rest = w8d_solve_rest(w, cfg, ext.gz);
+    const double z_rest = w8d_solve_rest(w, cfg, F_g);
     FpdState st;
     st.init(cfg, N, ST_STENCIL, 0);
     // 下壁平衡点 / 体相 / 上壁平衡点（离散镜像）
@@ -885,12 +898,12 @@ static void w8e_gpu_cpu_wall()
     }
     st.upload(ST_PARTICLE);
 
-    compute_particle_forces(cfg, pot, ext, w, N, st.Rx, st.Ry, st.Rz,
+    compute_particle_forces(cfg, pot, w, N, st.Rx, st.Ry, st.Rz,
                             st.Fx, st.Fy, st.Fz);
     st.download(ST_PARTICLE);
 
     double cFx[3], cFy[3], cFz[3];
-    compute_particle_forces_cpu(cfg, pot, ext, w, N,
+    compute_particle_forces_cpu(cfg, pot, w, N,
                                 st.Rx, st.Ry, st.Rz, cFx, cFy, cFz);
 
     double fmax = 0.0, dmax = 0.0;
@@ -904,29 +917,27 @@ static void w8e_gpu_cpu_wall()
     }
     const double rel = fmax > 0.0 ? dmax / fmax : 0.0;
 
-    std::printf("      下壁平衡点 z=%.4f  F_z = %+.3e\n", st.Rz[0], st.Fz[0]);
-    std::printf("      体相       z=%.4f  F_z = %+.3e\n", st.Rz[1], st.Fz[1]);
-    std::printf("      上壁平衡点 z=%.4f  F_z = %+.3e\n", st.Rz[2], st.Fz[2]);
+    std::printf("      下壁平衡点 z=%.4f  F_wall,z = %+.3e\n", st.Rz[0], st.Fz[0]);
+    std::printf("      体相       z=%.4f  F_wall,z = %+.3e\n", st.Rz[1], st.Fz[1]);
+    std::printf("      上壁平衡点 z=%.4f  F_wall,z = %+.3e\n", st.Rz[2], st.Fz[2]);
     std::printf("      GPU vs CPU 装配 max 相对差 = %.3e\n", rel);
 
     check(rel < 1e-12, "W8e GPU 与 CPU 装配在壁面开启时一致");
 
-    // 定量断言①：下壁平衡点上【总力恰好为 0】—— 这就是沉降的力平衡，
-    // 跑在 GPU 装配路径上。壁面项被漏掉时这里会读到 -10，一目了然。
-    check(std::fabs(st.Fz[0]) < 1e-10,
-          "W8e 下壁平衡点上的总力 = 0（壁面力精确抵消重力）");
+    // 定量断言①：下壁平衡点上「壁面力 + 净重力 = 0」。跑在 GPU 装配路径上；
+    // 壁面项被漏掉时这里会读到 0，而净重力是 -10，一目了然。
+    check(std::fabs(st.Fz[0] + F_g) < 1e-10,
+          "W8e 下壁平衡点：壁面力 + F_g = 0（壁面力精确抵消净重力）");
 
-    // 定量断言②：镜像位置上的壁面力必须【逐位反对称】⇒ 总力 = 2·g_z。
-    //
-    // ⚠️ 上壁【不存在】平衡点，这不是缺陷：上壁的排斥方向朝下（远离壁面），
-    //    与重力同向，两者叠加永远托不住粒子。只有下壁能承接沉降堆积。
-    //    把这里写成「上壁也应该平衡」会得到一个永远 FAIL 的假判据。
-    check(std::fabs(st.Fz[2] - 2.0 * ext.gz) < 1e-10,
-          "W8e 上壁镜像处壁面力反对称 ⇒ 总力 = 2·g_z（上壁无平衡点，符合物理）");
+    // 定量断言②：镜像位置上的壁面力必须【逐位反对称】⇒ F_wall = F_g（向下）。
+    // 于是「壁面力 + 净重力 = 2F_g」。上壁【不存在】平衡点：上壁的排斥方向朝下、
+    // 与重力同向，两者叠加永远托不住粒子。
+    check(std::fabs(st.Fz[2] - F_g) < 1e-10,
+          "W8e 上壁镜像处壁面力 = F_g（总力 = 2F_g，上壁无平衡点）");
 
-    // 定量断言③：体相只受外场
-    check(std::fabs(st.Fz[1] - ext.gz) < 1e-12 && st.Fz[1] == cFz[1],
-          "W8e 体相粒子只受外场（壁面力逐位为 0）");
+    // 定量断言③：体相只有壁面项，而壁面项在那里恒 0（重力不在装配里）。
+    check(st.Fz[1] == 0.0 && st.Fz[1] == cFz[1],
+          "W8e 体相粒子的装配力逐位为 0（重力不在 compute_particle_forces）");
 
     st.finish();
 }

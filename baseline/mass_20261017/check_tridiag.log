@@ -1,0 +1,13 @@
+=== 泊松三对角自检（纯 CPU，无卡可跑）===
+  三对角 Nz=2：Thomas vs 稠密 Gauss（全 12 列）  PASS
+      Nz= 2  max 相对差 = 1.807e-16
+  三对角 Nz=6：Thomas vs 稠密 Gauss（全 12 列）  PASS
+      Nz= 6  max 相对差 = 2.060e-16
+  三对角 Nz=32：Thomas vs 稠密 Gauss（全 16 列） PASS
+      Nz=32  max 相对差 = 2.041e-16
+  三对角 Nz=64：Thomas vs 稠密 Gauss（全 4 列）  PASS
+      Nz=64  max 相对差 = 2.843e-16
+  奇异列 (0,0) 定规：x_0 ≈ 0 且满足原 Neumann 方程 PASS
+      |x_0| = 8.216e-15   |A0 x - b| = 8.216e-15
+
+全部通过

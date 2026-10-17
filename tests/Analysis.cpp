@@ -32,8 +32,11 @@ static void fill_derived(FpdConstants& c)
     for (int d = 0; d < 3; d++)
     {
         c.lambda_T[d] = c.int_phi[d] / c.int_phi2[d];
-        c.mass[d]     = c.int_phi[d] * c.int_phi[d] / c.int_phi2[d];   // rho = dV = 1
-        c.mass_eff[d] = 1.5 * c.mass[d];
+        // M_i = int(rho phi) = S1 + (ratio_rho-1) S2（文献的质量口径）
+        c.mass_i[d]   = c.int_phi[d] + (c.ratio_rho - 1.0) * c.int_phi2[d];
+        // M_eq = S1^2/S2 = lambda^T M_i；rho=1 时它就是旧文档误标成 M_i 的量
+        c.mass[d]     = c.int_phi[d] * c.int_phi[d] / c.int_phi2[d];
+        c.mass_eff[d] = 1.5 * c.mass_i[d];
     }
 
     double p_lo = c.int_phi[0],  p_hi = c.int_phi[0];
@@ -55,10 +58,11 @@ static void fill_derived(FpdConstants& c)
     c.spread_mass     = (m_hi - m_lo) / m_lo;
 }
 
-FpdConstants compute_fpd_constants(PhiParams pp, NS_Config cfg,
+FpdConstants compute_fpd_constants(PhiParams pp, NS_Config cfg, double ratio_rho,
                                    double Rx, double Ry, double Rz, int n_scan)
 {
     FpdConstants c;
+    c.ratio_rho = ratio_rho;
 
     // --- 主值 ---
     sum_phi_powers<FACE_X>(pp, cfg, Rx, Ry, Rz, c.int_phi[0], c.int_phi2[0]);
@@ -130,23 +134,25 @@ void print_fpd_constants(FpdConstants fc, PhiParams pp)
     const char* dir[3] = {"FACE_X", "FACE_Y", "FACE_Z"};
 
     printf("=== FPD 常量表 ===\n");
-    printf("  a = %.4f   xi = %.4f   eta_c/eta_l = %.1f   截断半径 = %.1f   模板盒 %d^3\n",
-           pp.radius, 1.0 / pp.inv_xi, pp.ratio_eta, sqrt(pp.range2), pp.n_range);
+    printf("  a = %.4f   xi = %.4f   eta_c/eta_l = %.1f   rho_p/rho_l = %.4f   截断半径 = %.1f   模板盒 %d^3\n",
+           pp.radius, 1.0 / pp.inv_xi, pp.ratio_eta, fc.ratio_rho, sqrt(pp.range2), pp.n_range);
     printf("\n");
-    printf("  方向      int(phi)      int(phi^2)    lambda^T      M_i        M_eff\n");
+    // 四个质量口径别混：M_i 是文献的 int(rho phi)；M_eq = S1^2/S2 = lambda^T M_i
+    // 才是代码里力→加速度的离散比值；M_eff 是附加质量估计。旧文档把 M_eq 标成了 M_i。
+    printf("  方向      int(phi)      int(phi^2)    lambda^T      M_i        M_eq       M_eff\n");
     for (int d = 0; d < 3; d++)
     {
-        printf("  %-8s %11.6f  %12.6f  %10.6f  %10.4f  %10.4f\n",
+        printf("  %-8s %11.6f  %12.6f  %10.6f  %10.4f  %10.4f  %10.4f\n",
                dir[d], fc.int_phi[d], fc.int_phi2[d],
-               fc.lambda_T[d], fc.mass[d], fc.mass_eff[d]);
+               fc.lambda_T[d], fc.mass_i[d], fc.mass[d], fc.mass_eff[d]);
     }
     printf("\n");
-    printf("  三方向散布   int(phi) %.3e   int(phi^2) %.3e   M_i %.3e\n",
+    printf("  三方向散布   int(phi) %.3e   int(phi^2) %.3e   M_eq %.3e\n",
            fc.spread_int_phi, fc.spread_int_phi2, fc.spread_mass);
     printf("    -> int(phi^2) 的一致性是交错混叠的直接判据（%s，阈值 1e-4）\n",
            fc.spread_int_phi2 < 1e-4 ? "PASS" : "FAIL");
     printf("\n");
-    printf("  亚格点扫描 %d^3 个偏移：M_i = %.4f   [%.4f, %.4f]   散布 %.4f%%\n",
+    printf("  亚格点扫描 %d^3 个偏移：M_eq = %.4f   [%.4f, %.4f]   散布 %.4f%%\n",
            fc.n_scan, fc.mass_mean, fc.mass_min, fc.mass_max, fc.spread_subgrid * 100.0);
     printf("    -> 这是整个方法的【系统误差下限】（%s，阈值 1%%）\n",
            fc.spread_subgrid < 0.01 ? "PASS" : "FAIL");
@@ -163,7 +169,7 @@ void print_fpd_constants(FpdConstants fc, PhiParams pp)
     const double curv   = 8.0 * M_PI * a * xi * xi * (M_PI * M_PI / 24.0);
 
     printf("  独立对照（与代码无关）\n");
-    printf("    连续球坐标积分    int(phi) = %.4f   int(phi^2) = %.4f   M_i = %.4f\n",
+    printf("    连续球坐标积分    int(phi) = %.4f   int(phi^2) = %.4f   M_eq = %.4f\n",
            i1, i2, m_cont);
     printf("    离散 vs 连续      %.4f%%          %.4f%%           %.4f%%\n",
            fabs(fc.int_phi[0] - i1) / i1 * 100.0,

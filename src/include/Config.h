@@ -28,8 +28,11 @@ struct FpdConfig
     double radius = 0.0;
     double xi = 0.0;
     double ratio_eta = 0.0;
+    double ratio_rho = 1.0;          // rho_p / rho_l；=1 即论文的等密度假设
 
     // --- 物理（可选）---
+    // gravity_* 是**加速度**：体力密度 rho*g，净体密度 (rho-rho_l)*g。
+    // 要复现旧的「每粒子恒力 F_old」，填 g = F_old / ((ratio_rho-1) * int(phi))。
     double gravity_x = 0.0;
     double gravity_y = 0.0;
     double gravity_z = 0.0;

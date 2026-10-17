@@ -44,8 +44,8 @@ struct PotentialParams
     double dudr_at_rc;    // 派生：U'_bare(rcut)
 };
 
-// 每粒子的恒定外力（不是加速度）。gx/gy/gz 是三分量，为将来的壁面/沉降预留。
-struct ExternalField { double gx, gy, gz; };
+// 均匀外场加速度 ExternalField 定义在 Common.h：它是质量力（rho*g）的驱动量，
+// 不是粒子力，所以不归本文件。重力由 Mass.cpp 的 apply_gravity 以体力进入。
 
 // 壁面排斥势的参数组。
 //
@@ -228,14 +228,11 @@ static inline WallParams no_wall()
 // 粒子间力装配。GPU 版：gang-over-i + vector-reduction-over-j 全矩阵（零 atomic）。
 // 每个粒子独立算自己的力，牛三靠 g(r) 的对称性 + 全矩阵覆盖保证。
 //
-// 求和顺序在固定 N 与固定 gang/vector 配置下是确定的 —— 与 Viscosity.cpp:40 /
-// Velocity.cpp:21 算 sum_phi 和 V 是同一机制（spike_pair_bench 已实测逐位可复现）。
-//
-// 壁面力并入同一处装配（不另开 kernel）：这样 --verify-forces / J5 / J7 自动覆盖
-// 新的力项，不需要各自改判据。代价是两个实现各自多一行，符合 CLAUDE.md 约束 6
-// 对「两份实现独立维护」的要求（势函数体共享，装配各写各的）。
+// 只装配【粒子对势 + 壁面力】。均匀外场（重力）不在这里：它是作用在质量密度
+// rho(r) 上的体力 (rho-rho_l)*g，由 Mass.cpp 的 apply_gravity 进入面心力场。
+// 这样「力 = -dU/dr」与「重力 = 质量 x 加速度」是两条互不污染的路。
 // ---------------------------------------------------------------------------
-void compute_particle_forces(NS_Config cfg, PotentialParams pot, ExternalField ext,
+void compute_particle_forces(NS_Config cfg, PotentialParams pot,
                              WallParams wall,
                              int N,
                              const double* Rx, const double* Ry, const double* Rz,
@@ -243,7 +240,7 @@ void compute_particle_forces(NS_Config cfg, PotentialParams pot, ExternalField e
 
 // CPU 参考实现：串行 i<j 半矩阵。与 GPU 版是两份独立实现（各自验证装配逻辑），
 // 供纯 CPU 判据（CheckPotential.cpp）与 fpd_tool 的 --verify-forces 使用。
-void compute_particle_forces_cpu(NS_Config cfg, PotentialParams pot, ExternalField ext,
+void compute_particle_forces_cpu(NS_Config cfg, PotentialParams pot,
                                  WallParams wall,
                                  int N,
                                  const double* Rx, const double* Ry, const double* Rz,

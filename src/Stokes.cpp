@@ -1,12 +1,14 @@
 #include "Stokes.h"
 #include "Poisson.h"
 
-void step_navier_stokes
+int step_navier_stokes
 (
     NS_Config cfg,
     double* vx, double* vy, double* vz,
     double* p,
     double* fx, double* fy, double* fz,
+    const double* inv_rho_x, const double* inv_rho_y, const double* inv_rho_z,
+    double* cg_r, double* cg_s, double* cg_zq,
     double* eta,                            // 正应力位置粘度 (Cell Center)
     double* etaXY, double* etaYZ, double* etaZX, // 切应力位置粘度 (Edges)
     double* pi_dx, double* pi_dy, double* pi_dz,
@@ -157,11 +159,14 @@ void step_navier_stokes
         }
     }
 
-    // --- 3a. 显式一步：v* = v + dt·(-∇·Π + f) ---
+    // --- 3a. 显式一步：v* = v + dt·a·(-∇·Π + f) -------------------------
     // 每个面心只算【一次】(∇·Π)_α，直接写 tmp_fα = v*（tmp_f* 复用为 v* 的存储，
     // 零额外显存）。原实现把每个面算了两次（d_pix_ijk 与左邻的 d_pix_im 是同一个量），
     // 这里消掉重复，Π 的读取减半 —— 正对 README 记录的缓存瓶颈。
-    #pragma acc parallel loop collapse(3) present(vx, vy, vz, fx, fy, fz, pi_dx, pi_dy, pi_dz, pi_nx, pi_ny, pi_nz, tmp_fx, tmp_fy, tmp_fz)
+    //
+    // a = 1/rho 在面心（Mass.cpp 建）。density_on=0 时 a 恒 1.0，
+    // 乘 1.0 是逐位恒等，所以常密度路径的结果不变。
+    #pragma acc parallel loop collapse(3) present(vx, vy, vz, fx, fy, fz, inv_rho_x, inv_rho_y, inv_rho_z, pi_dx, pi_dy, pi_dz, pi_nx, pi_ny, pi_nz, tmp_fx, tmp_fy, tmp_fz)
     for (int i = 0; i < Nx; i++)
     {
         for (int j = 0; j < Ny; j++)
@@ -195,9 +200,9 @@ void step_navier_stokes
                              + (pi_nx[eb] - pi_nx[ebjm])
                              + (pi_dz[IDX(i, j, kp)] - pi_dz[ijk]);
 
-                tmp_fx[ijk] = vx[ijk] + DT * (-d_pix + fx[ijk]);   // v*x
-                tmp_fy[ijk] = vy[ijk] + DT * (-d_piy + fy[ijk]);   // v*y
-                tmp_fz[ijk] = vz[ijk] + DT * (-d_piz + fz[ijk]);   // v*z
+                tmp_fx[ijk] = vx[ijk] + DT * inv_rho_x[ijk] * (-d_pix + fx[ijk]);   // v*x
+                tmp_fy[ijk] = vy[ijk] + DT * inv_rho_y[ijk] * (-d_piy + fy[ijk]);   // v*y
+                tmp_fz[ijk] = vz[ijk] + DT * inv_rho_z[ijk] * (-d_piz + fz[ijk]);   // v*z
 
                 // 壁面法向面【永不修正】：v*z 在两壁钉死为 0。
                 // ⚠️ 这个置 0 是【承重的】：上面体心段的 km=(k-1+Nz)%Nz 与下面
@@ -236,14 +241,37 @@ void step_navier_stokes
     }
 
     // --- 4. 求解压力泊松方程 ---
-    // xy 2D 批量 FFT + z 向 Thomas。归一化因子（Nx·Ny）只在 solve_pressure
-    // 内部出现一次。数学推导与公式↔代码对照见 doc/PressurePoisson.md。
-    solve_pressure(cfg, fft_data, tri_w, plan_xy, p, diag);
+    // 常密度：div(grad p) = b，xy 2D 批量 FFT + z 向 Thomas，直接解。
+    // 变密度：div(a grad p) = b，用同一个 FFT 求解器作预条件器跑 PCG。
+    // 数学推导与公式↔代码对照见 doc/PressurePoisson.md（变系数见 §16）。
+    int cg_iter = 0;
+    if (cfg.density_on)
+    {
+        // 把右端（fft_data 的实部）拷进 cg_r；solve_pressure_var 入口约定 = b。
+        #pragma acc parallel loop collapse(3) present(fft_data, cg_r)
+        for (int i = 0; i < Nx; i++)
+        {
+            for (int j = 0; j < Ny; j++)
+            {
+                for (int k = 0; k < Nz; k++)
+                {
+                    const int ijk = IDX(i, j, k);
+                    cg_r[ijk] = fft_data[2 * ijk];
+                }
+            }
+        }
+        cg_iter = solve_pressure_var(cfg, cg_r, inv_rho_x, inv_rho_y, inv_rho_z,
+                                     fft_data, tri_w, plan_xy, p, diag, cg_s, cg_zq);
+    }
+    else
+    {
+        solve_pressure(cfg, fft_data, tri_w, plan_xy, p, diag);
+    }
 
     // --- 5. 修正步 (Correction / projection) ---
-    // v^{n+1} = v* - dt·∇p，其中 v* 就是 tmp_f*。
+    // v^{n+1} = v* - dt·a·∇p，其中 v* 就是 tmp_f*，a = 1/rho 在面心。
     // 必须与上面的求解分成两个 kernel：p 的梯度要读相邻线程写的 p。
-    #pragma acc parallel loop collapse(3) present(vx, vy, vz, p, tmp_fx, tmp_fy, tmp_fz)
+    #pragma acc parallel loop collapse(3) present(vx, vy, vz, p, inv_rho_x, inv_rho_y, inv_rho_z, tmp_fx, tmp_fy, tmp_fz)
     for (int i = 0; i < Nx; i++)
     {
         for (int j = 0; j < Ny; j++)
@@ -255,16 +283,17 @@ void step_navier_stokes
                 int jp = (j + 1) % Ny;
                 int kp = (k + 1) % Nz;
 
-                vx[ijk] = tmp_fx[ijk] - DT * (p[IDX(ip, j, k)] - p[ijk]);
-                vy[ijk] = tmp_fy[ijk] - DT * (p[IDX(i, jp, k)] - p[ijk]);
+                vx[ijk] = tmp_fx[ijk] - DT * inv_rho_x[ijk] * (p[IDX(ip, j, k)] - p[ijk]);
+                vy[ijk] = tmp_fy[ijk] - DT * inv_rho_y[ijk] * (p[IDX(i, jp, k)] - p[ijk]);
                 // 壁面法向面永不修正：vz 在那两处恒 0。k=Nz-1 时 kp 会回绕到 0，
                 // 那是错的，所以这一层干脆不写（vz[Nz-1] 保持初值 0）。
                 if (!wz_pinned_zface(cfg, k))
                 {
-                    vz[ijk] = tmp_fz[ijk] - DT * (p[IDX(i, j, kp)] - p[ijk]);
+                    vz[ijk] = tmp_fz[ijk] - DT * inv_rho_z[ijk] * (p[IDX(i, j, kp)] - p[ijk]);
                 }
             }
         }
     }
 
+    return cg_iter;
 }

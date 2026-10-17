@@ -7,6 +7,12 @@
 // （cufftPlanMany，n = {Ny, Nx}）把 x 当最后一维，z-slab 在 IDX 下天然连续。
 #define IDX(i, j, k) ((i) + (j)*Nx + (k)*Nx*Ny)
 
+// --- 均匀外场加速度（POD，按值进 GPU kernel）---
+// 重力语义：g 是**加速度**，体力密度是 rho*g；减去均匀的 rho_l*g 之后只剩
+// (rho - rho_l)*g = (ratio_rho - 1)*sum(phi)*g（见 Mass.cpp）。
+// 它【不再】是每粒子恒力，也不再进 compute_particle_forces。
+struct ExternalField { double gx, gy, gz; };
+
 // --- 流体求解器参数（POD，按值进 GPU kernel）---
 struct NS_Config
 {
@@ -21,6 +27,12 @@ struct NS_Config
     // noise_gamma1 = 1 时把壁面棱边的噪声因子强制成 1（关掉 √2）。**只为判据对照**，
     // 用来证明 √2 是被数据选中的、而不是被假设的。生产路径恒为 0。
     int    noise_gamma1;
+
+    // density_on = 1：动量方程带变系数 rho(r)，压力方程解 div((1/rho) grad p) = b。
+    // = 0：rho == 1，走原常系数直解路径（Mass.cpp 的面心反密度场恒为 1.0）。
+    // 由 Config.cpp 的 make_ns_config(FpdConfig) 按 ratio_rho != 1 设置；
+    // 判据代码自己构造 NS_Config 时保持 0。
+    int    density_on;
 };
 
 // --- 相场参数（POD，按值进 GPU kernel）---
@@ -73,6 +85,7 @@ static inline NS_Config make_ns_config(int Nx, int Ny, int Nz,
     cfg.inv_dt = 1.0 / dt;
     cfg.W      = noise_on ? sqrt(2.0 * kT / dt) : 0.0;
     cfg.noise_gamma1 = 0;
+    cfg.density_on   = 0;
     return cfg;
 }
 

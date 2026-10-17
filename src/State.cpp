@@ -61,8 +61,11 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
     {
         h_fx.assign(size, 0); h_fy.assign(size, 0); h_fz.assign(size, 0);
         h_eta.assign(size, 0); h_etaXY.assign(size, 0);
+        // 反密度场：初值 1.0（density_on=0 时永远保持 1.0；=1 时由 Mass.cpp 重算）
+        h_inv_rho_x.assign(size, 1.0); h_inv_rho_y.assign(size, 1.0); h_inv_rho_z.assign(size, 1.0);
         h_etaYZ.assign(esize, 0); h_etaZX.assign(esize, 0);   // 棱边：Nz+1 层
         fx = h_fx.data(); fy = h_fy.data(); fz = h_fz.data();
+        inv_rho_x = h_inv_rho_x.data(); inv_rho_y = h_inv_rho_y.data(); inv_rho_z = h_inv_rho_z.data();
         eta = h_eta.data(); etaXY = h_etaXY.data(); etaYZ = h_etaYZ.data(); etaZX = h_etaZX.data();
     }
     if (want & ST_VELOCITY)
@@ -77,7 +80,15 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
         h_tmp_fx.assign(size, 0); h_tmp_fy.assign(size, 0); h_tmp_fz.assign(size, 0);
         h_fft.assign(size * 2, 0);
         h_randD.assign(slotD, 0); h_randN.assign(slotN, 0);
-        h_diag.assign(1, 0);
+        h_diag.assign(2, 0);
+        // 变系数压力求解的 PCG 暂存只在 density_on=1 时分配：
+        // 残差/搜索方向/预条件输出各一个 size 数组；常系数路径用不到
+        //（step_navier_stokes 收到 null 也不读）。
+        if (cfg.density_on)
+        {
+            h_cg_r.assign(size, 0); h_cg_s.assign(size, 0); h_cg_zq.assign(size, 0);
+            cg_r = h_cg_r.data(); cg_s = h_cg_s.data(); cg_zq = h_cg_zq.data();
+        }
         pi_dx = h_pi_dx.data(); pi_dy = h_pi_dy.data(); pi_dz = h_pi_dz.data();
         pi_nx = h_pi_nx.data(); pi_ny = h_pi_ny.data(); pi_nz = h_pi_nz.data();
         tmp_fx = h_tmp_fx.data(); tmp_fy = h_tmp_fy.data(); tmp_fz = h_tmp_fz.data();
@@ -102,6 +113,7 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
     if (want & ST_PHI)
     {
         api_copyin(fx, nbSize); api_copyin(fy, nbSize); api_copyin(fz, nbSize);
+        api_copyin(inv_rho_x, nbSize); api_copyin(inv_rho_y, nbSize); api_copyin(inv_rho_z, nbSize);
         api_create(eta, nbSize); api_create(etaXY, nbSize);
         api_create(etaYZ, nbEdge); api_create(etaZX, nbEdge);
     }
@@ -114,10 +126,11 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
         api_create(pi_dx, nbSize); api_create(pi_dy, nbSize); api_create(pi_dz, nbSize);
         api_create(pi_nx, nbEdge); api_create(pi_ny, nbEdge); api_create(pi_nz, nbSize);
         api_create(tmp_fx, nbSize); api_create(tmp_fy, nbSize); api_create(tmp_fz, nbSize);
+        if (cg_r) { api_create(cg_r, nbSize); api_create(cg_s, nbSize); api_create(cg_zq, nbSize); }
         api_create(fft, size * 2 * sizeof(double));
         api_create(randD, slotD * sizeof(double));
         api_create(randN, slotN * sizeof(double));
-        api_create(diag, sizeof(double));       // 单元素诊断量，create 即可（求解器整体覆写）
+        api_create(diag, 2 * sizeof(double));   // [0]=|Σb|, [1]=PCG 最终相对残差
         api_copyin(tri_w, nbSize);
     }
 
@@ -145,7 +158,9 @@ void FpdState::finish()
     // 逆序 delete；acc_delete 幂等（不在 present 表时是 no-op）
     if (parts & ST_SOLVER)
     {
-        api_delete(diag, sizeof(double));
+        api_delete(diag, 2 * sizeof(double));
+        if (cg_r) { api_delete(cg_zq, nbSize); api_delete(cg_s, nbSize); api_delete(cg_r, nbSize);
+                    cg_r = 0; cg_s = 0; cg_zq = 0; }
         api_delete(randN, slotN * sizeof(double));
         api_delete(randD, slotD * sizeof(double));
         api_delete(fft, size * 2 * sizeof(double));
@@ -161,6 +176,7 @@ void FpdState::finish()
     if (parts & ST_PHI)
     {
         api_delete(etaZX, nbEdge); api_delete(etaYZ, nbEdge); api_delete(etaXY, nbSize); api_delete(eta, nbSize);
+        api_delete(inv_rho_z, nbSize); api_delete(inv_rho_y, nbSize); api_delete(inv_rho_x, nbSize);
         api_delete(fz, nbSize); api_delete(fy, nbSize); api_delete(fx, nbSize);
     }
     if (parts & ST_PARTICLE)
@@ -213,6 +229,7 @@ void FpdState::download(unsigned bits, bool pressure)
     if (bits & ST_PHI)
     {
         api_down(fx, nbSize); api_down(fy, nbSize); api_down(fz, nbSize);
+        api_down(inv_rho_x, nbSize); api_down(inv_rho_y, nbSize); api_down(inv_rho_z, nbSize);
         api_down(eta, nbSize); api_down(etaXY, nbSize);
         api_down(etaYZ, nbEdge); api_down(etaZX, nbEdge);
     }
@@ -222,8 +239,8 @@ void FpdState::download(unsigned bits, bool pressure)
         if (pressure) { api_down(p, nbSize); }
     }
     // ST_SOLVER 的临时场不下载（仅供 step_navier_stokes 内部使用）；
-    // 例外是 diag：它是壁面相容性诊断量，生产运行要定期读回监控（判据 W8）。
-    if (bits & ST_SOLVER) { api_down(diag, sizeof(double)); }
+    // 例外是 diag：[0]=|Σb|，[1]=变系数路径的 PCG 最终相对残差（生产要监控）。
+    if (bits & ST_SOLVER) { api_down(diag, 2 * sizeof(double)); }
 }
 
 void FpdState::upload(unsigned bits)
@@ -242,6 +259,7 @@ void FpdState::upload(unsigned bits)
     if (bits & ST_PHI)
     {
         api_up(fx, nbSize); api_up(fy, nbSize); api_up(fz, nbSize);
+        api_up(inv_rho_x, nbSize); api_up(inv_rho_y, nbSize); api_up(inv_rho_z, nbSize);
         api_up(eta, nbSize); api_up(etaXY, nbSize);
         api_up(etaYZ, nbEdge); api_up(etaZX, nbEdge);
     }

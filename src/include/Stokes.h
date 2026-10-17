@@ -25,11 +25,18 @@
 //   offset(step, c) = (2*step + c) * (size*3),   c ∈ {0,1}
 // 重启时按同一公式算出同一 offset，逐位相等是构造上保证的，与跑了多少步无关。
 // ---------------------------------------------------------------------------
-void step_navier_stokes(
+// 返回变系数路径的 PCG 迭代数；常系数路径（density_on=0）返回 0。
+//
+// 密度参数：inv_rho_x/y/z 是面心 1/rho（Mass.cpp 建；density_on=0 时恒 1.0）。
+// 显式步与修正步都乘它；density_on=1 时压力方程解 div(a grad p)=b。
+// 三个 cg_* 是 density_on=1 才分配的 PCG 暂存（=0 时可为 null，不被读取）。
+int step_navier_stokes(
     NS_Config cfg,
     double* vx, double* vy, double* vz,
     double* p,
     double* fx, double* fy, double* fz,
+    const double* inv_rho_x, const double* inv_rho_y, const double* inv_rho_z,
+    double* cg_r, double* cg_s, double* cg_zq,
     double* eta,
     double* etaXY, double* etaYZ, double* etaZX,
     double* pi_dx, double* pi_dy, double* pi_dz,
@@ -37,7 +44,7 @@ void step_navier_stokes(
     double* fft_data,
     cufftHandle plan_xy,                   // xy 批量 2D FFT 计划（batch = Nz）
     const double* tri_w,                   // z 向三对角前推系数
-    double* diag,                          // (0,0) 列相容性残差 |Σb̂|（长度 1）
+    double* diag,                          // [0]=|Σb̂|，[1]=PCG 最终相对残差（长度 2）
     curandGenerator_t gen,
     double* randD, double* randN,
     double* tmp_fx, double* tmp_fy, double* tmp_fz,
