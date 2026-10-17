@@ -2,6 +2,9 @@
 
 > ⚠️ **本文档与 `src/Poisson.cpp` 共同定义同一个离散算子 `div∘grad`。**
 > 改任一侧必须同步更新另一侧，并重跑 `./build/fpd_check --check-poisson`。
+> **`ratio_rho ≠ 1` 时算子是变系数的 `div(a grad p)`（§16）**，`a=1/rho` 在面心；
+> 常系数路径是它的 `a ≡ 1` 特例。改 §16 或 `solve_pressure_var` 必须重跑
+> `--check-poisson` 的 V1–V5。
 > **Phase 7-B 起，`src/include/Wall.h` 与本文档 §14 共同定义壁面的速度边界条件
 > 与噪声处理** —— 改 `Wall.h` 必须同步 §14 并重跑 `./build/fpd_check --check-wall`。
 > **Phase 6 起，`src/include/Potential.h` 的 `wall_*` 与本文档 §15 共同定义壁面的
@@ -319,6 +322,9 @@ spike 的 T3 额外实测：不相容右端 `Σb = 32 ≠ 0` 时解漂移 `|x[Nz
 | `p = Re/(Nx·Ny)`（2D 变换点数） | `solve_wall` 的 `nrm` |
 | `div∘grad` 参考（Neumann ghost） | `CheckPoisson.cpp` 的 `apply_operator` |
 | 稠密 Gauss 参考 | `CheckPoisson.cpp` 的 `dense_gauss` |
+| 变系数算子 `div(a grad p)`（§16） | `Poisson.cpp` 的 `apply_laplacian_var` |
+| PCG + FFT 预条件（§16） | `Poisson.cpp` 的 `solve_pressure_var` |
+| 面心 `a=1/rho` 的构建（§16） | `Mass.cpp` 的 `update_mass_fields` |
 
 **Phase 7-B（壁面 BC）新增的对照**：
 
@@ -341,7 +347,7 @@ spike 的 T3 额外实测：不相容右端 `Σb = 32 ≠ 0` 时解漂移 `|x[Nz
 |---|---|
 | 表面间隙 `h_bottom = (z + 1/2) − a`、`h_top = (Nz − 1/2 − z) − a` | `Potential.h` 的 `wall_gap_bottom` / `wall_gap_top` |
 | 壁面合力 `F_z = g(h_b)h_b − g(h_t)h_t`（`g = pair_force_over_r`） | `Potential.h` 的 `wall_force_z` |
-| 平衡高度 `\|F_wall(h_rest)\| = \|g_z\|` 的二分反解 | `Config.cpp` 的 `wall_rest_gap` |
+| 平衡高度 `\|F_wall(h_rest)\| = \|F_g\|` 的二分反解（判据自带，`Config.cpp` 已不再提供） | `CheckWall.cpp` 的 `w8d_solve_rest` / `CheckMass.cpp` 的 MA7 |
 | 壁面力并入粒子力装配（GPU/CPU 各写一份） | `Potential.cpp` 的 `compute_particle_forces*` |
 | `F_z = −dU_wall/dz` 的四阶差分对照（判据） | `CheckWall.cpp` 的 `w8a_force_vs_energy` |
 | 上下壁镜像反对称（判据） | `CheckWall.cpp` 的 `w8b_mirror_symmetry` |
@@ -609,14 +615,18 @@ h_top    = (Nz - 1/2 - z) - a
 
 ### 15.5 平衡高度与「上壁没有平衡点」
 
-对向下的重力 `g_z < 0`：
+对向下的净重力 `F_g = (ratio_rho-1)·∫φ_z·g_z < 0`：
 
-- **下壁有平衡点**：`F_wall(h_rest) = |g_z|` 反解出 `h_rest`，粒子中心停在
+- **下壁有平衡点**：`F_wall(h_rest) = |F_g|` 反解出 `h_rest`，粒子中心停在
   `z_rest = −1/2 + a + h_rest`。这是沉降堆积的稳态高度。
 - **上壁没有平衡点**：上壁的排斥方向朝下（远离壁面），与重力**同向**。
   两者叠加，永远托不住粒子。判据 W8e 里对此有专门断言
-  （镜像位置的壁面力反对称 ⇒ 总力 `= 2·g_z`）—— 把它写成「上壁也该平衡」
+  （镜像位置的壁面力反对称 ⇒ `F_wall = F_g`，总力 `= 2F_g`）—— 把它写成「上壁也该平衡」
   会得到一个永远 FAIL 的假判据。
+
+⚠️ 重力改为体力后，`F_g` **不在** `compute_particle_forces` 里。W8e 把 `F_g` 当作
+给定数字参与断言；它的独立验证在 `--check-mass` 的 MA4（体力总和）与 MA7
+（`F_wall(z_rest) + F_g = 0`）。
 
 ### 15.6 平衡间隙处的相场截断
 
@@ -626,8 +636,9 @@ h_top    = (Nz - 1/2 - z) - a
 真实后果；但它意味着贴壁粒子的 z 向有效质量/迁移率是 z 相关的。
 
 **实践含义**：选壁面势参数时应让 `z_rest` 落在截断亏损 ≲1% 的区间
-（本项目参数下约 `z_rest ≳ 4`）。`dump_config` 会把 `h_rest` 与 `z_rest`
-一并打印出来，配错了能一眼看见。
+（本项目参数下约 `z_rest ≳ 4`）。`dump_config` **不再**估算 `h_rest/z_rest`
+（旧版本曾打印，已删除）；需要时用 `--check-mass` 的 MA7 或 `CheckWall` 的
+`w8d_solve_rest` 独立反解。
 
 ### 15.7 判据与实测
 
@@ -638,22 +649,24 @@ h_top    = (Nz - 1/2 - z) - a
 | **W8b** | 上下壁镜像 `F_z(Nz−1−z) = −F_z(z)`（整数/半整数位置） | **0.000e+00** | 逐位 |
 | **W8b** | 同上，亚格点位置 | **0.000e+00** | < 1e-14 |
 | **W8c** | 体相（min(h) > rcut）内 `F_z` 逐位为 0 | **0** | 逐位 |
-| **W8d** | 独立二分反解的 `z_rest` 处 `g_z + F_wall = 0` | **7.3e-14** | < 1e-10·\|g_z\| |
+| **W8d** | 独立二分反解的 `z_rest` 处 `F_g + F_wall = 0` | **7.3e-14** | < 1e-10·\|F_g\| |
 | **W8d** | 平衡点是吸引子（下推上、上压下）+ 偏离 0.2 残差大 >100× | 见日志 | 定性 |
 | **W8d** | 刚度余量：半间隙处排斥 > 100×重力 | **1.7e+04×** | > 100× |
 | **W8e** | GPU vs CPU 装配一致（关掉粒子间势以隔离壁面项） | **0.000e+00** | < 1e-12 |
-| **W8e** | 下壁平衡点上总力 = 0；上壁镜像处总力 = 2·g_z | **7.3e-14** / 精确 | < 1e-10 |
+| **W8e** | 下壁 `F_wall + F_g = 0`；上壁 `F_wall = F_g`（总力 `2F_g`）；体相 `F = 0` | **7.3e-14** / 精确 | < 1e-10 |
 
-回归锚（`wallpotential = none` 时必须**逐字节不动**）：
+判据锚（`wallpotential = none` 时 W8a/W8c 必须逐位为零）：
 
-- `--check-wall` 的 W1–W7 全部数字不变
-- `--check` / `--check-potential` / `--check-tridiag` / `--lambda` 输出不变
-- 200 步 smoke 的 5 个检查点**逐位相同**
-- 逐位重启（5 步 vs 2+3）逐位相同
+- `--check-wall` 的 W1–W7 按当前代码实测通过；本次不再要求与旧日志逐位相同
+  （用户已明确旧基线可弃），但密度关闭路径与 HEAD 版在 W5b 上**逐位一致**已实测。
+- `--check` / `--check-potential` / `--check-tridiag` / `--lambda` 全部通过；
+  密度关闭路径的 5 步 smoke 与 2+3 步重启**逐位相同**（`fpd_tool --diff-ckpt`）。
+- 重力迁出后 W8e 的断言形式改了（`F_wall + F_g = 0`），数值内容不变。
 
-**端到端**（生产路径，`wall_eps=1, wall_sigma=2, gravity_z=-10`，32³，200k 步）：
-粒子从盒心沉降后停在 `z ≈ 4.68~4.73`，与独立解出的 `z_rest = 4.7189` 吻合。
-这是 W8d 作为**力平衡**判据无法覆盖、由生产算例补上的那一步。
+**端到端**（生产路径，`wall_eps=1, wall_sigma=2, ratio_rho=2, gravity_z=-0.058718`）：
+独立二分给出 `z_rest = 4.7191`（旧的等密度力语义下是 4.7189；贴壁 z 向 ∫φ 小 0.47%
+是差异来源），力平衡残差 6e-14（`--check-mass` MA7）。真正的动力学沉降由生产算例
+（`config/sed.cfg`）承担，属于力平衡判据覆盖不到的那一步。
 
 ### 15.8 判据的判别力（只测 PASS 的判据是哑的）
 
@@ -676,3 +689,85 @@ h_top    = (Nz - 1/2 - z) - a
 > W8d 是力平衡判据，不是动力学判据。流体驰豫时间 `τ ≈ (L/π)²/ν` 是几万步量级；
 > 把它放进 `--check-wall` 会让判据从 2 分钟变成几十分钟而**判别力不增加**
 > （力平衡是动力学的必要条件，且是这里唯一可精确判的量）。
+
+## 16. 变系数投影 `div(a grad p)`（ratio_rho ≠ 1）
+
+### 16.1 方程与离散
+
+动量方程带密度场 $\rho(\mathbf r)=1+(ratio\_rho-1)\sum_i\phi_i$ 后，投影步是
+
+$$\rho\left(\partial_t\mathbf v+(\mathbf v\cdot\nabla)\mathbf v\right)
+=-\nabla p+\nabla\cdot\left[\eta(\nabla\mathbf v+\nabla\mathbf v^T)\right]-\nabla\cdot\tilde\sigma+\mathbf f+(\rho-1)\mathbf g$$
+
+取 $a=1/\rho$（面心），显式步与修正步是
+
+$$\mathbf v^*=\mathbf v+dt\,a\left(-\nabla\cdot\Pi+\mathbf f_g+\mathbf f\right),\qquad
+\mathbf v=\mathbf v^*-dt\,a\nabla p,\qquad
+\nabla\cdot(a\nabla p)=\frac1{dt}\nabla\cdot\mathbf v^*$$
+
+离散与常系数路径**同一套 stencil、同一套 BC**，只把面心的 1 换成 $a$：
+
+```
+(Lp)[i,j,k] = a_x[i,j,k](p[i+1]-p) - a_x[i-1,j,k](p-p[i-1])
+            + a_y[...]              + a_z 项
+x/y 周期回绕；k=0 只保留 +a_z[i,j,0](p[k+1]-p)；
+k=Nz-1 只保留 -a_z[i,j,Nz-2](p-p[k-1])（Neumann ghost，壁面通量为 0）
+```
+
+$a\equiv1$ 时它逐位退化成 §5 的 `div∘grad`。零空间仍是常向量，
+右端 $\sum b=0$（§8a 的望远镜求和不变）。
+
+### 16.2 求解器：FFT 预条件 PCG
+
+- 预条件器 $B=-a_{bar}M$，$M$ 就是 §5 的常系数算子（直接复用 `solve_pressure`，
+  不复制 FFT/Thomas）。$a_{bar}$ 是实际参与算子的面心 $a$ 的算术平均；
+  `a_bar == 1` 时就是原求解器。预条件应用 = `solve_pressure(-r) * (1/a_bar)`。
+- CG 解 $A p=-b$，$A=-L$。迭代：$z=B^{-1}r$，$\rho=r\cdot z$，$s=z$；
+  $q=As$，$\alpha=\rho/(s\cdot q)$，$p\mathrel{+}=\alpha s$，$r\mathrel{+}=\alpha(Ls)$
+  （注意 $As=-Ls$，所以 $r$ 的更新是加号），$\beta=\rho_{\rm new}/\rho$，
+  $s=z+\beta s$。收敛判据 $\|r\|_2\le10^{-12}\|b\|_2$，上限 200 次。
+- **固定 $p_0=0$**：不拿上一步的 $p$ 作初值。$p$ 不入存档；warm start 会让重启后的
+  第一个 CG 走另一条（虽然收敛到同一解的）迭代路径，逐位重启就破了。
+  `a`、`b` 由 $R$ 确定性重算时，固定 $p_0=0$ 的每一轮算术都可逐位复现。
+- **零空间**：$r_0$ 与最终 $p$ 显式去均值。预条件器输出自带的任意常数**不**逐次投影
+  —— 它被 $A$ 零化、且与零均值 $r$ 正交，只给 $p$ 加常数，最后去掉。
+- 诊断：`diag[0]=|Σb|`、`diag[1]=` 最终相对残差；`solve_pressure_var` 返回迭代数，
+  生产日志打印 `cg=平均/最大`。残差 $>10^{-6}$ 时主循环落盘后中止。
+
+### 16.3 实测与成本
+
+| 构型 | 网格 | 迭代数（到 1e-12） | 备注 |
+| --- | --- | --- | --- |
+| 孤立粒子 | 32³, N=1 | 16 | 最坏情形：对比域孤立 |
+| 均匀 a≡1 | 32³, N=0 | **1** | 预条件器精确（正确性信号） |
+| 致密格点 | 512×512×64, N=7803 | 16 | 支撑域重叠，$a$ 起伏大 |
+| 生产格点 | 512×512×128, N=28611 | 16 | 0.1 步/秒（含 28k 粒子的模板散布） |
+
+代价是一次压力求解要 ~16 次 FFT。`a_bar` 缩放**没有**把致密情形的迭代数降下来
+（$a$ 的相对起伏本身很大），它是零成本的保险，不是救命稻草。
+真正要降成本需要两级预条件或几何多重网格 —— **未立项**。
+
+### 16.4 判据（`--check-poisson` 的 V1–V5）
+
+| # | 内容 | 实测 | 阈值 |
+| --- | --- | --- | --- |
+| V1 | $L\mathbf 1=0$ | 逐位 0 | 逐位 |
+| V2 | $(Lp,q)=(p,Lq)$（非均匀 $a$） | 0 ~ 7e-16 | < 1e-12 |
+| V3 | 往返 $b=Lp_{\rm ref}$，解的零均值差 | 3e-12 ~ 1.2e-11 | < 1e-10 |
+| V4 | 一步完整投影后 $\max\lvert\nabla\cdot v\rvert/\max\lvert v\rvert$ | 3e-12 ~ 8e-12 | < 1e-10 |
+| V5 | PCG 迭代数 / 相对残差 | 14–18 / 2e-13 ~ 3e-13 | < 200 / < 1e-11 |
+
+V3 的阈值 1e-10 而不是 1e-11：强对比（$a$ 从 0.25 到 1）时算子的条件数把
+1e-12 的残差放大到 ~1e-11 的解误差，这是精度上限，不是 bug。V4 直接量
+「算子与修正步是否匹配」，是 §13 第 1 条盲区的正解。
+
+### 16.5 已知边界
+
+- 迭代数随对比度/几何变化，$ratio\_rho$ 很大时可能超过 30 次；`--check-poisson`
+  的上限是 200，生产残差守卫会中止而不是静默。
+- 显存：常驻 3 个面心 $a$ 数组，`density_on` 时再加 3 个 CG 暂存；512×512×128
+  约 +1.6 GB（总约 8.4 GB，RTX 3060 12 GB 内）。
+- 逐位重启：$a$ 由 $R$ 重算，$a$ 的 atomic 累加在支撑域重叠时跨进程不逐位 ——
+  与 $\eta$ 场同一条既有边界（PROGRESS.md 已知隐患 0）。
+- $\lambda^T$ 未进力投影（§15 与 `ns-equation.md` §3.3/§3.4）；它不影响这里的
+  投影算子，只影响粒子的瞬态/布朗响应。

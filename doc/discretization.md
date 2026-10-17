@@ -8,7 +8,8 @@
   * 第一篇：[从 F=ma 推导 Navier–Stokes 方程（FPD 形式）](ns-equation.md)
   * 第二篇：[用二维傅里叶变换求解不可压 NS](fourier-projection.md)
 
-单位：$dx = 1$、$\rho = 1$、$\eta_\ell = 1$
+单位：$dx = 1$、$\rho_\ell = 1$、$\eta_\ell = 1$；粒子/溶剂密度比 `ratio_rho`$=\rho_p/\rho_\ell$
+（$\rho(\mathbf r)$ 是场，见 `ns-equation.md` §3.4 与 `PressurePoisson.md` §16）。
 索引约定$IDX(i,j,k) = i + jN_x + kN_xN_y$，$x$ 变化最快。
 ## 1 MAC 交错网格
 
@@ -114,6 +115,12 @@ w   = order(dx, dy, dz, pp.radius, pp.inv_xi);
 
 $$\sum\hat{\phi}_x(r) \neq \sum\hat{\phi}_y(r)$$
 当然，相场和粘度场也要每个算一遍。
+
+⚠️ **同一个 `sum_phi{x,y,z}` 还是该方向的质量**：`Mass.cpp` 的面心密度场就是
+把 $\sum_n\phi_n$ 按同一组 `stencil_point<FACE_*>` 摊到网格上，再取 $a=1/\rho$；
+重力体力 $(\rho-1)g$ 与压力投影的变系数 $a$ 都用它。所以「三套归一化因子」
+不是三个可以互相替代的近似值，而是三个方向各自的质量/几何度量（见
+`ns-equation.md` §3.3 与 `PressurePoisson.md` §16）。
 
 ## 2 z向壁面如何与循环边界结合
 ### 2.1 我们要解什么方程组
@@ -443,9 +450,11 @@ $$v_x[k] = \frac{g}{2\eta}\left[\frac{N_z^{2}+1}{4} - \left(k - \frac{N_z-1}{2}\
 
 时间推进用显式 Euler：5.7 算 $v^{*}$，第二篇 (7) 式修正。显式粘性项要求扩散数满足
 
-$$dt \le \frac{\rho\,dx^{2}}{2d\,\eta_c} \tag{11}$$
+$$dt \le \frac{\min\rho\,dx^{2}}{2d\,\eta_c} \tag{11}$$
 
-本项目 $\eta_c = 50$、$d = 3$、$dx = 1$，故 $dt \le 1/300 \approx 0.0033$。
+$\rho$ 现在是场：`ratio_rho > 1` 时 $\min\rho$ 仍由溶剂（=1）给出，界不收紧；
+`ratio_rho < 1` 时界按 $\min\rho$ 缩小，必须由使用者调小 $dt$。
+本项目 $\eta_c = 50$、$d = 3$、$dx = 1$，故 $dt \le 1/300 \approx 0.0033$；
 生产用 $dt = 0.002$，正好在稳定区里。
 
 ## 7 公式 ↔ 代码对照

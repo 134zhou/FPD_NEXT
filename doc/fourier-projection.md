@@ -7,7 +7,13 @@
   * 第一篇：[从 F=ma 推导 Navier–Stokes 方程（FPD 形式）](ns-equation.md)
   * 第三篇：[二维与 z 向离散化](discretization.md)
 
-单位约定同第一篇：格距 $dx\equiv 1$、密度 $\rho\equiv 1$、溶剂粘度 $\eta_\ell\equiv 1$。
+单位约定同第一篇：格距 $dx\equiv 1$、溶剂密度 $\rho_\ell\equiv 1$、溶剂粘度 $\eta_\ell\equiv 1$。
+
+> ⚠️ 本页推导默认 $\rho\equiv1$（论文的等密度假设）。`ratio_rho ≠ 1` 时密度是场，
+> 投影方程变成 $\nabla\cdot((1/\rho)\nabla p)=\frac1{dt}\nabla\cdot v^*$，
+> 这时 §4 的「逐模式代数除法」不再成立；求解器换成「常系数 FFT 作预条件器的 PCG」。
+> 完整推导、离散与实测迭代数见 [`PressurePoisson.md`](PressurePoisson.md) §16。
+> 本页的投影法/正交分解/FFT 归一化在 $a\equiv1$ 时仍然是求解器的核心。
 
 ## 1 压力是个外行
 

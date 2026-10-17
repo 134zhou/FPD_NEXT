@@ -63,7 +63,12 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
 ## 数值不变量
 
 - 边界固定为 x/y 周期、z 上下无滑移；不要恢复已删除的全周期路径。
-- 索引 `i + j*Nx + k*Nx*Ny`，x 最快；dx、密度、溶剂粘度均为 1。
+- 索引 `i + j*Nx + k*Nx*Ny`，x 最快；dx、溶剂密度、溶剂粘度均为 1。
+  粒子/溶剂密度比是 `ratio_rho`；密度是场 `rho(r)`，不是常数。
+- 质量/密度场的唯一真值源：`Mass.cpp` 用与 `sum_phi` 相同的
+  `stencil_point<FACE_X/Y/Z>` 从 R 重算面心 `a = 1/rho`；不入 .fpd、不在别处重算。
+  重力只能经 `Mass.cpp` 的 `apply_gravity` 以体力 (rho-rho_l)g 进入；
+  `compute_particle_forces` 不含重力。
 - Stencil.h 是半格偏移、支撑域截断和模板回绕的唯一实现。
   模板盒 n_range = 2*range+1；投影与归一化使用同一位置和同一权重，各方向独立。
 - Wall.h 是 z 棱边存储、法向面钉死和 RNG 长度的唯一实现；棱边为 Nx*Ny*(Nz+1)，
@@ -71,12 +76,14 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
   壁面 kernel 使用已经代入 ghost 后的显式 ±2vx/±2vy 公式。
 - Poisson.cpp 与 doc/PressurePoisson.md §12 共同定义 div∘grad。
   变换归一化为 Nx*Ny；(0,0) 奇异列用 d_0 -= 1 定规，不能清空整列。
+  `ratio_rho != 1` 时是变系数 div(a grad p)，由 §16 与 `solve_pressure_var` 共同定义；
+  改任一侧必须同步并重跑 --check-poisson 的 V1–V5。
 - 速度/噪声边界属于 Wall.h；粒子壁面力属于 Potential.h，二者分开维护。
   壁面力使用表面间隙 h，要求 h>0；不对负间隙 clamp，保留运行中越界中止。
 - 壁面剪切噪声幅度 ×√2 只作用于两壁的 EDGE_YZ/EDGE_ZX；公式见 §14。
 - Philox 每步按 `(2*step+c)*size*3` 设置 offset；不从存档恢复 RNG 状态。
 - 固定粒子数和 GPU 配置下保持力求和顺序；不引入粒子力 atomic 求和。
-- 相场支撑域重叠时粘度 atomic 导致跨进程末位差异；逐位重启只承诺不重叠情况。
+- 相场支撑域重叠时粘度/密度场 atomic 导致跨进程末位差异；逐位重启只承诺不重叠情况。
 - 不把旧代码作为定量真值；独立参考不得复制待测实现的模板盒等假设。
 - 离散常量使用模拟相同的求和；不能用解析球体积代替扩散界面体积。
 - 平衡态误差用分块平均：b≥10τ_int、块数≥20，冲突时报 FAIL，不能降低门槛。
@@ -86,18 +93,21 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
 | 修改内容 | 必须执行 |
 |---|---|
 | Stencil、Viscosity、Force、Velocity、Potential.h | --check；相场加权须覆盖 N=2 重叠均匀流 |
-| Poisson.cpp | --check-poisson；同步 PressurePoisson.md §12 |
+| Poisson.cpp（常系数） | --check-poisson 的 P5/P6；同步 PressurePoisson.md §12 |
+| Poisson.cpp（变系数/PCG） | --check-poisson 的 V1–V5；同步 PressurePoisson.md §16 |
 | Wall.h、Stokes.cpp、Viscosity.cpp | --check-wall；同步 PressurePoisson.md §14 |
 | Potential.h/.cpp、Wall.h、main.cpp 越界逻辑 | --check-wall，含 W8；壁面力改动同步 §15 |
+| Mass.cpp、ratio_rho、重力语义 | --check-mass（MA1–MA7）+ --check-wall（W8）；同步 ns-equation §3.4 与 README |
 | 势公式 | --check-potential，保持能量与导数独立实现 |
 | 配置/主流程精简 | --check-config、合法输入检查点前后对照、单粒子重启 |
 | 二进制 IO 任一侧 | 下述 C++/Python 互操作检查 |
 
 --check-wall 覆盖 W1–W6、W3b、W4s、W5b 及 W8；W3b 直接核对两片壁面剪切通量，
-W8e 是近壁 GPU/CPU 力装配对照。
-关闭壁面势时的回归锚是原壁面判据输出不变，不能用 W8e 单项替代。
+W8e 是近壁 GPU/CPU 力装配对照（重力已不在装配里，F_g 是给定值）。
+关闭壁面势时的判据锚是 W8a/W8c 逐位为零；不再要求与历史日志逐位一致。
 粒子侧壁面 FDT/冻结粒子能量均分尚未完成；历史 W7 重启记录不代表它已验证。
 已删除的 --noise/--equipart 不属于现有覆盖；详见 PROGRESS.md 已知隐患。
+lambda^T 未进力投影，只在 --lambda/--check-mass 里测量；不要把它当成已实现。
 
 ## IO 与可视化
 

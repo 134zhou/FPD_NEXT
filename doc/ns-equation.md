@@ -7,8 +7,9 @@
   * 第二篇：[用（二维）傅里叶变换求解不可压 NS](fourier-projection.md)
   * 第三篇：[二维与 z 向离散化](discretization.md)
 
-单位约定（与代码一致）：格距 $dx \equiv 1$、密度 $\rho \equiv 1$、
-溶剂粘度 $\eta_\ell \equiv 1$。命名约定：**小写 = 流体场**（$v, p, \eta$），
+单位约定（与代码一致）：格距 $dx \equiv 1$、**溶剂**密度 $\rho_\ell \equiv 1$、
+溶剂粘度 $\eta_\ell \equiv 1$；粒子/溶剂密度比 `ratio_rho`$\,=\rho_p/\rho_\ell$。
+命名约定：**小写 = 流体场**（$v, p, \eta$），
 **大写 = 粒子量**（$V, F, R$）。这两个约定贯穿全部源码。
 
 ## 1 记号
@@ -17,7 +18,7 @@
 | --- | --- | --- |
 | $\mathbf{v}(\mathbf{r},t)$ | 流体速度场 | `vx/vy/vz` |
 | $p(\mathbf{r},t)$ | 压力 | `p` |
-| $\rho$ | 流体密度，单位约定为 1 | —— |
+| $\rho(\mathbf r)$ | 质量密度场 $\rho_\ell+(\rho_p-\rho_\ell)\sum_i\phi_i$，$\rho_\ell=1$ | `Mass.cpp` 的面心 $a=1/\rho$ |
 | $\sigma$ | Cauchy 应力张量 | `pi_dx/pi_dy/pi_dz/pi_nx/pi_ny/pi_nz` |
 | $\Pi$ | 代码里实际构造的动量通量张量 | 同上 |
 | $\eta(\mathbf{r})$ | 粘度场 | `eta/etaXY/etaYZ/etaZX` |
@@ -127,9 +128,26 @@ $$\eta(\nabla v + \nabla v^T) =
 **不可压条件**
 
 $$\nabla\cdot\mathbf{v} = 0$$
-把本构代回 (1)，并用 $\rho \equiv 1$：
+把本构代回 (1)。密度的处理是本页与代码最容易脱节的一处：
+
+- **论文的原始假设**（[SM] 2018 式 (3)）：液体与粒子密度相同，$\rho$ 是常数。
+  取 $\rho \equiv 1$ 后得到教科书形式的 (2)：
 
 $$\frac{\partial \mathbf{v}}{\partial t} + (\mathbf{v}\cdot\nabla)\mathbf{v} = -\nabla p + \nabla\cdot\left[\eta\left(\nabla\mathbf{v} + \nabla\mathbf{v}^{T}\right)\right] + \mathbf{f} \tag{2}$$
+
+- **本实现（ratio_rho ≠ 1）**：粒子相场把密度也变成场，
+  $\rho(\mathbf r)=\rho_\ell+(\rho_p-\rho_\ell)\sum_i\phi_i$（$\rho_\ell=1$），
+  惯性项保留 $\rho$，压力投影因此变成变系数：
+
+$$\rho\left(\partial_t\mathbf v+(\mathbf v\cdot\nabla)\mathbf v\right)
+= -\nabla p+\nabla\cdot\left[\eta(\nabla\mathbf v+\nabla\mathbf v^{T})\right]+\mathbf f+(\rho-\rho_\ell)\mathbf g$$
+
+$$\nabla\cdot\left(\frac1\rho\nabla p\right)=\frac1{dt}\nabla\cdot\mathbf v^*,\qquad
+\mathbf v=\mathbf v^*-dt\,\frac1\rho\nabla p \tag{2'}$$
+
+重力的均匀项 $\rho_\ell\mathbf g$ 被静压 $\nabla p_h$ 解析减掉，所以体密度只剩
+$(\rho-\rho_\ell)\mathbf g$（Boussinesq 拆分，代数上精确）。$\rho\equiv1$ 时 (2')
+逐位退化成 (2) 与原常系数泊松。离散与 PCG 见 `doc/PressurePoisson.md` §16。
 
 **这是本页最重要的一步，也是本项目与教科书常粘度 NS 方程的分水岭。**
 因为 FPD 的粘度是空间场
@@ -251,32 +269,44 @@ $$\begin{pmatrix}
 \end{pmatrix}$$
 ### 3.3 力的注入与粒子速度：相场加权平均
 
-粒子 $i$ 受到合力 $\mathbf{F}_i$（粒子间势 + 外场）。FPD 的做法是按相场权重摊开成体力密度：
+粒子 $i$ 受到合力 $\mathbf{F}_i$（粒子间势 + 壁面力；重力已改为体力，不在 $\mathbf F_i$ 里）。
+FPD 的做法是按相场权重摊开成体力密度：
 
-$$f(r) = \frac{\phi(r)\,F_i}{\sum_i \phi_i(r)}$$
+$$f(r) = \sum_i \frac{\phi_i(r)\,\mathbf F_i}{\int\phi_i\,dr}$$
+
+**分母是每粒子自己的 $\int\phi_i$，不是全场 $\sum_i\phi_i$。** 本项目的旧文档写成
+$\phi F_i/\sum_i\phi_i$，与代码相反（那是被修掉的 C1/C2 类缺陷：分子分母必须用同一个
+`Loc`，否则 $\sum_{\rm grid} f \neq \sum_n F_n$，产生位置相关的伪力）。
 
 反过来，粒子速度定义为流场在相场支撑域上的加权平均：
 
-$$V_i = \frac{\sum_i \mathbf{v(r)\,\phi_i(r)}}{\sum_i \phi_i(r)}$$
+$$V_i = \frac{\int \mathbf{v(r)}\,\phi_i(r)\,dr}{\int\phi_i(r)\,dr}$$
 
-由 [SM] 2018 的界面修正，粒子的修正因子、质量与有效质量是
+由 [SM] 2018 的界面修正，粒子的质量、修正因子与等效质量是
 
-$$M_i = \rho\,\frac{\left(\int\phi_i\right)^2}{\int\phi_i^2}, \qquad \lambda^{T} = \frac{\int\phi_i}{\int\phi_i^2}, \qquad M_{eff} = \frac{3}{2}M_i$$
+$$M_i = \int\rho\,\phi_i\,dr,\qquad
+\lambda^{T} = \frac{\int\phi_i}{\int\phi_i^2},\qquad
+M_{\rm eq} = \frac{\left(\int\phi_i\right)^2}{\int\phi_i^2} = \lambda^{T}M_i,\qquad
+M_{\rm eff} = \frac{3}{2}M_i$$
 
-$\lambda^{T}$ 修正「有限厚度界面被当作刚体」引入的偏差，
-$\xi/a\to 0$ 时 $\lambda^{T}\to 1$。
+$\lambda^{T}$ 修正「有限厚度界面被当作刚体」引入的偏差，$\xi/a\to 0$ 时 $\lambda^{T}\to 1$。
+**代码的力投影没有乘 $\lambda^T$**：均匀体力下局部「力→加速度」的离散比值是
+$S_1^2/\int(\phi^2/\rho)\approx ratio\_rho\cdot M_{\rm eq}$，不是 $M_i$。旧表把
+$M_{\rm eq}$ 标成 $M_i$（`Analysis.cpp` 的 `mass`），本次已拆开；$\lambda^T$ 缺口只测量、
+不修，它影响瞬态与布朗速度，不影响沉降的稳态力平衡。
 这些量**必须用与模拟相同的离散求和**计算：
 
-**实测**（`fpd_check --lambda`，纯 CPU，见 `PROGRESS.md`）：
+**实测**（`fpd_check --lambda 32 2.0`，纯 CPU，见 `PROGRESS.md`）：
 
 | 常量 | x / y | z |
 | --- | --- | --- |
-| $\int\phi$ | 170.3061 | 170.3061 |
-| $\int\phi^2$ | 100.841 | 100.841 |
-| $\lambda^{T}$ | 1.688855 | 1.688855 |
-| $M_i$ | 287.6223 | 287.6486 |
+| $\int\phi$ | 170.3061 | 170.3060 |
+| $\int\phi^2$ | 100.841 | 100.832 |
+| $\lambda^{T}$ | 1.688855 | 1.689010 |
+| $M_i=\int\rho\phi$（ratio_rho=2） | 271.1472 | 271.1379 |
+| $M_{\rm eq}=S_1^2/S_2$ | 287.6223 | 287.6486 |
 
-$M_{eff} = 431.4335$。三方向 $\sum\phi_\alpha^2$ 散布 9.185e-05，
+$M_{\rm eff}=1.5M_i=406.72$（ratio_rho=2）。三方向 $\sum\phi_\alpha^2$ 散布 9.185e-05，
 4³ 亚格点扫描散布 0.0348% —— 后者是整个方法的**系统误差下限**。
 
 ```cpp
@@ -299,7 +329,38 @@ Vx[n] = sx / sum_phix[n];
 
     **绝不能用解析球体 $\frac{4}{3}\pi a^3$ 代替离散求和**：
     真实 $\int\phi$ 比它大 **24.1%**，那是扩散界面的曲率项（$+8\pi a\xi^2\pi^2/24$ 量级）。
-    误用会让 $M_i$ 差 24%，直接毁掉验证。
+    误用会让 $\int\phi$、$M_i$、$M_{\rm eq}$ 一起差 24%，直接毁掉验证。
+
+## 3.4 密度对比：从等密度到 $\rho(\mathbf r)$
+
+论文 [SM] 2018 在式 (3) 前写得很清楚："we assume that the density of the liquid is
+the same as that of the particles"。本项目原先把这条假设实现成了 $\rho\equiv1$：
+流体的惯性密度是 1，粒子的惯性也只来自流体（$M\approx V$），而重力却绕过质量直接
+加到每个粒子上。这在本项目要研究的「粒子与溶液密度不同」的体系里是不自洽的。
+
+本实现把它换成
+
+$$\rho(\mathbf r)=1+(ratio\_rho-1)\sum_i\phi_i(\mathbf r),\qquad a(\mathbf r)=\frac1{\rho(\mathbf r)}$$
+
+三件事同时改变，且必须同时改：
+
+1. **惯性**：动量方程左端保留 $\rho$。压力投影变成
+   $\nabla\cdot(a\nabla p)=\frac1{dt}\nabla\cdot v^*$，$v=v^*-dt\,a\nabla p$。
+   $a$ 在面心，与力的摊布、$V_i$ 的归一化用同一个 `Loc`；$v^*$ 与修正步也用它。
+   这是 `Mass.cpp` 与 `Poisson.cpp` 变系数路径的职责。
+2. **重力**：改为体力 $\rho\mathbf g$。均匀项 $\rho_\ell\mathbf g$ 被静压
+   $\nabla p_h$ 解析减掉（代数上精确；变系数投影无法精确吸收均匀体力，所以必须
+   显式减），净体密度是 $(\rho-\rho_\ell)\mathbf g$。粒子受到的净重力自动是
+   $(\rho_p-\rho_\ell)\int\phi\,\mathbf g$ —— 浮力由密度差给出。
+3. **粒子惯性**：粒子速度仍定义为 $V_i=\int v\phi_i/\int\phi_i$；它的惯性来自
+   粒子内部流体的 $\rho_p$，所以密粒子加速更慢、布朗速度更小（FDT 里噪声也随
+   $\rho$ 缩放）。$\lambda^T$ 缺口仍在（见 §3.3），本次只测量、不修。
+
+$ratio\_rho=1$ 时 $\rho\equiv1$、$a\equiv1$，变系数路径逐位退化成原常系数求解器
+（`--check-poisson` 的 V1–V5、`--check-mass` 的 MA1–MA7）。
+**边界**：$\nabla\cdot v=0$ 与「密度场由粒子位置给定」意味着质量守恒的残差是
+$\partial_t\rho+v\cdot\nabla\rho=O(\xi/a)$，与 FPD 的界面近似同阶；这是对论文
+等密度假设的扩展，不是论文原定理。$\lambda^T$、粒子侧 FDT 仍是独立缺口。
 
 ## 4 与 [PRL] 2000 的差异
 
@@ -311,21 +372,26 @@ Vx[n] = sx / sum_phix[n];
 | 热噪声 | 无 | 涨落应力 + FDT，$W=\sqrt{2kT/dt}$ |
 | 力密度归一化 | 未归一化 | 除以 $\int\phi_i$ |
 | 转动自由度 | 无 | 无 |
-| 界面修正因子 $\lambda^{T}, M_i$ | 无 | 有（[SM] 第 2.1–2.2 节） |
+| 界面修正因子 $\lambda^{T}, M_i$ | 无 | **只测量，未进力投影**（[SM] 第 2.1–2.2 节；本实现的缺口） |
+| 密度 $\rho$ | 常数（=1） | 场 $\rho(\mathbf r)$，`ratio_rho`（对论文的扩展） |
 
 ## 5 公式 ↔ 代码对照
 
 | 公式 | 代码 |
 | --- | --- |
 | $\frac{D v}{Dt} = \partial_t v + (v\cdot\nabla) v$ | `Stokes.cpp` §2 的 `vax*vax`、`vsx_y*vsy_x` 等对流项 |
-| $\Pi = \rho vv - \eta(\nabla v+\nabla v^{T}) - \tilde{\sigma}$ | `Stokes.cpp` §2（`pi_dx/pi_dy/pi_dz/pi_nx/pi_ny/pi_nz`） |
+| $\Pi = vv - \eta(\nabla v+\nabla v^{T}) - \tilde{\sigma}$ | `Stokes.cpp` §2（`pi_dx/pi_dy/pi_dz/pi_nx/pi_ny/pi_nz`）；单位密度通量 |
 | $\phi_i = \frac{1}{2}[\tanh((a-\vert r- r_i\vert)/\xi)+1]$ | `Common.h: order()` |
+| $\rho = 1+(ratio\_rho-1)\sum\phi_i$、$a=1/\rho$ | `Mass.cpp: update_mass_fields()`（面心） |
 | $\eta = \eta_\ell + (\eta_c-\eta_\ell)\sum\phi_i$ | `Viscosity.cpp`（`d_eta = ratio_eta − 1`） |
 | $W = \sqrt{2kT/dt}$ | `Common.h: make_ns_config()` |
 | $\langle\tilde{\sigma}\tilde{\sigma}\rangle$ 的 FDT | `Stokes.cpp` §2 的 `sqrt(2*eta)` 与 `sqrt(eta)` 噪声项 |
-| $f = \sum\phi_i F_i/\sum\phi_i$ | `Force.cpp: update_force_field()` |
-| $V_i = \int v\phi_i/\sum\phi_i$ | `Velocity.cpp: update_particle_velocity()` |
-| $\lambda^{T}, M_i, M_{eff}$ | `tests/Analysis.cpp: compute_fpd_constants()` |
+| $f = \sum_i\phi_i F_i/\int\phi_i$ | `Force.cpp: update_force_field()` |
+| $V_i = \int v\phi_i/\int\phi_i$ | `Velocity.cpp: update_particle_velocity()` |
+| $\mathbf f_g=(\rho-1)\mathbf g$ | `Mass.cpp: apply_gravity()` |
+| $\nabla\cdot(a\nabla p)=b$ + PCG | `Poisson.cpp: apply_laplacian_var` / `solve_pressure_var` |
+| $v^*=v+dt\,a(-\nabla\cdot\Pi+f)$、$v=v^*-dt\,a\nabla p$ | `Stokes.cpp` §3a / §5 |
+| $\lambda^{T}, M_i, M_{\rm eq}, M_{\rm eff}$ | `tests/Analysis.cpp: compute_fpd_constants()` |
 
 ## 6 下一步
 
