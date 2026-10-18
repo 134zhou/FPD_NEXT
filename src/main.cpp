@@ -206,15 +206,15 @@ static int run_production(const FpdConfig& c)
         {
             // 拉全检查点需要的数组（含 Fx/Fy/Fz —— 原来漏过，力恒 0 时无害，
             // 加粒子间力后会写出陈旧主机端零值；现在一步拉全，不再有遗漏）
-            st.download(ST_VELOCITY | ST_PARTICLE, false);
+            st.download(ST_VELOCITY | ST_PARTICLE);
             if (check_wall_bounds(step)) { writer.write(step); rc = 3; break; }
             if (!writer.write(step)) { rc = 2; break; }
         }
 
         if (step % c.interval_log == 0)
         {
-            st.download(ST_VELOCITY | ST_PARTICLE, false);
-            st.download(ST_SOLVER, false);      // 只含 diag；变系数路径看 PCG 残差
+            st.download(ST_VELOCITY | ST_PARTICLE);
+            st.download(ST_SOLVER);             // 只含 diag；变系数路径看 PCG 残差
             bool bad = false;
             for (int i = 0; i < size; i++)
             { if (!std::isfinite(st.vx[i])) { bad = true; break; } }
@@ -300,7 +300,7 @@ static int run_production(const FpdConfig& c)
         // 补算一次，保证「文件里的 F 对应文件里的 R」。
         compute_particle_forces(cfg, pot, wall, N, st.Rx, st.Ry, st.Rz,
                                 st.Fx, st.Fy, st.Fz);
-        st.download(ST_VELOCITY | ST_PARTICLE, false);
+        st.download(ST_VELOCITY | ST_PARTICLE);
         if (!writer.write(c.n_steps)) { rc = 2; }
     }
 

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <string>
 #include <vector>
+#include <sys/stat.h>
 
 #include "IOBin.h"
 #include "Config.h"
@@ -52,6 +53,27 @@ struct Holder
     }
 };
 
+// .fpd 尺寸判据：v3 不含 p，文件大小必须精确等于
+//   40（magic+endian+header）+ (3*size + 12*N)*8（数组）+ 8（校验和）
+//   = 48 + 24*size + 96*N。
+// 任何新增的整场数组（尤其是 p）都会让这条守卫失败 —— 这是「p 不入档」的回归判据。
+static bool check_ckpt_size(const char* path, const CkptHeader& h)
+{
+    struct stat st;
+    if (stat(path, &st) != 0) { fprintf(stderr, "错误: 无法 stat %s\n", path); return false; }
+
+    const long long expected = 48LL + 24LL * (long long)h.size() + 96LL * (long long)h.N;
+    printf("  文件大小     %lld 字节（无 p 期望 %lld）\n",
+           (long long)st.st_size, expected);
+    if ((long long)st.st_size != expected)
+    {
+        fprintf(stderr, "错误: %s 的大小 %lld 与无 p 布局 %lld 不符（多了/少了整场数组？）\n",
+                path, (long long)st.st_size, expected);
+        return false;
+    }
+    return true;
+}
+
 static int cmd_dump(int argc, char** argv)
 {
     const char* path = argv[2];
@@ -65,6 +87,7 @@ static int cmd_dump(int argc, char** argv)
     printf("  网格         %d x %d x %d   (size = %zu)\n", h.Nx, h.Ny, h.Nz, h.size());
     printf("  粒子数 N     %d\n", h.N);
     printf("  step         %lld\n", (long long)h.step);
+    if (!check_ckpt_size(path, h)) { return 1; }
     Holder H; H.alloc(h);
     CkptHeader h2;
     if (!load_checkpoint(path, h2, H.a, err))

@@ -363,6 +363,8 @@ static void w6_momentum_budget(int Nx, int Ny, int Nz)
                            st.tmp_fx, st.tmp_fy, st.tmp_fz, step);
 
         st.download(ST_VELOCITY | ST_PHI);
+        // p 不再随 ST_VELOCITY 下载（它不进 .fpd/导出路径）；W6 的 P̄ 显式取。
+        #pragma acc update self(st.p[0:size])
         for (int t = 0; t < size; t++) { vz_new[t] = st.vz[t]; }
 
         // 左边：所有【自由】z 面（k = 0 .. Nz-2）的 vz 变化之和 / dt
@@ -390,7 +392,7 @@ static void w6_momentum_budget(int Nx, int Ny, int Nz)
             }
         }
 
-        // P̄_k 从主机侧 p 取（ST_VELOCITY 已下载）；Z̄_k 必须把 pi_dz 拉下来 ——
+        // P̄_k 从主机侧 p 取（上面已显式 update self）；Z̄_k 必须把 pi_dz 拉下来 ——
         // 它是每步重算的中间量，download() 按设计不搬运它。
         // ⚠️ 用【运行时 API】而不是 `#pragma acc parallel loop reduction`：
         //    后者在本文件里读到了主机侧的陈旧零值（present 子句与运行时映射

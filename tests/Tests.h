@@ -33,6 +33,10 @@ int run_check_tridiag();
 // Nx<=0 时跑内置电池（偶/奇 Nz + 中盒子），否则只跑指定单盒。
 int run_check_poisson(int Nx, int Ny, int Nz);
 
+// 调试：测变系数 PCG 到双精度地板（1e-12..1e-16）的迭代数（需 GPU）。
+// 只打印标量，不导出 p 场；Nx<=0 时用 32³。
+int run_debug_pcg(int Nx, int Ny, int Nz);
+
 // Phase 7-B z 向无滑移壁面判据（需 GPU；除 W5b 外不开噪声）：
 //   W1 ∇·v 含两个壁面层到机器精度 / W2 vz 两壁钉死
 //   W3 平面 Poiseuille 与精确离散闭式一致 / W3b 两片壁面剪切通量展开式

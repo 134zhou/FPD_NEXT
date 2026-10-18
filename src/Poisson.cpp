@@ -204,12 +204,14 @@ int solve_pressure_var(NS_Config cfg,
                        const double* inv_rho_x, const double* inv_rho_y, const double* inv_rho_z,
                        double* fft_data, const double* tri_w, cufftHandle plan_xy,
                        double* p, double* diag,
-                       double* cg_s, double* cg_zq)
+                       double* cg_s, double* cg_zq,
+                       PcgTrace* trace)
 {
     const int Nx = cfg.Nx, Ny = cfg.Ny, Nz = cfg.Nz;
     const size_t size = (size_t)Nx * (size_t)Ny * (size_t)Nz;
-    const double tol = 1e-12;
-    const int max_iter = 200;
+    const double tol = trace ? trace->tol : 1e-12;
+    const int max_iter = trace ? trace->max_iter : 200;
+    if (trace) { trace->n = 0; }
 
     // --- 1. 右端统计：sum(b) 用于相容性诊断与去均值，||b|| 用于相对判据 ---
     double sb = 0.0, nb = 0.0;
@@ -349,6 +351,38 @@ int solve_pressure_var(NS_Config cfg,
             for (int j = 0; j < Ny; j++)
                 for (int k = 0; k < Nz; k++) { const double v = cg_r[IDX(i, j, k)]; rr2 += v * v; }
         rr = sqrt(rr2);
+
+        // 调试 trace：记录相对残差与去均值真实误差。生产 trace=null，零开销。
+        if (trace && trace->n < trace->cap)
+        {
+            const int k = trace->n;
+            if (trace->res) { trace->res[k] = rr / norm_b; }
+            if (trace->err && trace->p_ref)
+            {
+                const double* pref = trace->p_ref;
+                // 先算均值再算方差：直接算 e2 - es^2/size 在误差 ~1e-14 时
+                // 会因两个 O(1) 量相减而灾难性抵消（被 fmax 夹成 0）。
+                double es = 0.0;
+                #pragma acc parallel loop collapse(3) reduction(+:es) present(p, pref)
+                for (int i = 0; i < Nx; i++)
+                    for (int j = 0; j < Ny; j++)
+                        for (int kk = 0; kk < Nz; kk++)
+                        { es += p[IDX(i, j, kk)] - pref[IDX(i, j, kk)]; }
+                const double em = es / (double)size;
+                double e2 = 0.0;
+                #pragma acc parallel loop collapse(3) reduction(+:e2) present(p, pref)
+                for (int i = 0; i < Nx; i++)
+                    for (int j = 0; j < Ny; j++)
+                        for (int kk = 0; kk < Nz; kk++)
+                        {
+                            const int ijk = IDX(i, j, kk);
+                            const double d = (p[ijk] - pref[ijk]) - em;
+                            e2 += d * d;
+                        }
+                trace->err[k] = sqrt(e2);
+            }
+            trace->n++;
+        }
 
         if (rr <= tol * norm_b) { break; }
 

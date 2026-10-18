@@ -100,7 +100,9 @@ struct FpdState
     CkptArrays ckpt_arrays() const;
 
     // 拉回 / 推回某组数组（按 StatePart 位）。字节数在这里统一算，调用方不碰。
-    void download(unsigned bits, bool pressure = true); // 生产检查点无需回传 p；判据可按需读取
+    // ⚠️ p 永不从设备下载：它是求解器内部状态，不进 .fpd、也不进任何导出路径。
+    //    测试需要读 p 时用显式 `#pragma acc update self(st.p[0:size])`。
+    void download(unsigned bits);
     void upload(unsigned bits);                     // = update device（host→device）
 };
 

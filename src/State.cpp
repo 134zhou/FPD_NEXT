@@ -213,7 +213,7 @@ CkptArrays FpdState::ckpt_arrays() const
     return a;
 }
 
-void FpdState::download(unsigned bits, bool pressure)
+void FpdState::download(unsigned bits)
 {
     const size_t nbN    = (size_t)nalloc * sizeof(double);
     const size_t nbSize = size * sizeof(double);
@@ -235,8 +235,8 @@ void FpdState::download(unsigned bits, bool pressure)
     }
     if (bits & ST_VELOCITY)
     {
+        // p 不下载（求解器内部状态，不入档、不导出）。
         api_down(vx, nbSize); api_down(vy, nbSize); api_down(vz, nbSize);
-        if (pressure) { api_down(p, nbSize); }
     }
     // ST_SOLVER 的临时场不下载（仅供 step_navier_stokes 内部使用）；
     // 例外是 diag：[0]=|Σb|，[1]=变系数路径的 PCG 最终相对残差（生产要监控）。

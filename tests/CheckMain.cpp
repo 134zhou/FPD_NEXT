@@ -5,6 +5,7 @@
 //   fpd_check --check-tridiag
 //   fpd_check --check-poisson [Nx Ny Nz]
 //   fpd_check --check-wall [Nx Ny Nz]
+//   fpd_check --debug-pcg [Nx Ny Nz]
 //   fpd_check --lambda [L]
 //
 // 从 fpd 拆出：main.cpp 里的自检路径搬到这里，生产主循环留在 fpd。
@@ -70,6 +71,15 @@ int main(int argc, char** argv)
         return run_check_poisson(Px, Py, Pz);
     }
 
+    // 变系数 PCG 精度调试：需 GPU；只打印标量，不导出 p
+    if (argc > 1 && std::strcmp(argv[1], "--debug-pcg") == 0)
+    {
+        const int Px = (argc > 2) ? std::atoi(argv[2]) : 0;
+        const int Py = (argc > 3) ? std::atoi(argv[3]) : 0;
+        const int Pz = (argc > 4) ? std::atoi(argv[4]) : 0;
+        return run_debug_pcg(Px, Py, Pz);
+    }
+
     // Phase 7-B 壁面判据：需 GPU（走 cuFFT），但不开噪声
     if (argc > 1 && std::strcmp(argv[1], "--check-wall") == 0)
     {
@@ -108,6 +118,7 @@ int main(int argc, char** argv)
               << "      fpd_check --check-tridiag\n"
               << "      fpd_check --check-poisson [Nx Ny Nz]\n"
               << "      fpd_check --check-wall [Nx Ny Nz]\n"
+              << "      fpd_check --debug-pcg [Nx Ny Nz]\n"
               << "      fpd_check --check-mass [Nx Ny Nz]\n"
               << "      fpd_check --lambda [L] [ratio_rho]\n";
     return 2;

@@ -62,11 +62,28 @@ void apply_laplacian_var(NS_Config cfg,
 //
 // 常数零空间：r0 与最终 p 都显式去均值。预条件器输出自带的任意常数【不】逐次投影 ——
 // 它被 A 零化、且与零均值的 r 正交，对 CG 递推无影响（只给 p 加常数，最后去掉）。
+//
+// 调试用 trace（生产传 nullptr，走默认 tol/max_iter，算术路径逐位不变）：
+//   p_ref 是设备上的零均值参考解；res 存 ||r||/||b||，err 存去均值后的
+//   ||p-p_ref||（未归一化，调用方按 ||p_ref|| 归一化）。仅用于
+//   --debug-pcg 测「多少步到双精度地板」，不参与生产求解。
+struct PcgTrace
+{
+    const double* p_ref = 0;   // device，零均值；null 则不记误差
+    double* res = 0;           // host，长度 cap
+    double* err = 0;           // host，长度 cap
+    int     cap = 0;
+    int     n   = 0;           // 出口：记录的迭代数
+    double  tol = 1e-12;       // 覆盖生产 tol；调试设 0
+    int     max_iter = 200;    // 覆盖生产上限；调试设 300
+};
+
 int solve_pressure_var(NS_Config cfg,
                        double* cg_r,
                        const double* inv_rho_x, const double* inv_rho_y, const double* inv_rho_z,
                        double* fft_data, const double* tri_w, cufftHandle plan_xy,
                        double* p, double* diag,
-                       double* cg_s, double* cg_zq);
+                       double* cg_s, double* cg_zq,
+                       PcgTrace* trace = 0);
 
 #endif
