@@ -12,13 +12,15 @@
       |Σ_{ijk} b|（主机） = 3.811e+00    diag = 3.811e+00
 
 --- 变系数投影（div(a grad p)）---
+      V0 均匀 a=0.5 vs a=1.0：max|Δv*|/max|v*| = 0.000e+00
+  V0 对流加速度与均匀 a 无关（v* 逐位相同） PASS
   V1 高斯 a（amp=1, sigma=4）：L*1 = 0（逐位）    PASS
       高斯 a（amp=1, sigma=4） 对称性 (Lp,q)=-8.232707e+01  (p,Lq)=-8.232707e+01  相对差 6.905e-16
   V2 高斯 a（amp=1, sigma=4）：变系数算子对称  PASS
       高斯 a（amp=1, sigma=4） 往返：max|(p-p_ref)-mean| = 5.609e-12   PCG 迭代 16   |Σb|=2.75e-14   残差 2.49e-13
   V3 高斯 a（amp=1, sigma=4）：变系数算子往返  PASS
   V5 高斯 a（amp=1, sigma=4）：PCG 收敛（迭代 < 200，相对残差 < 1e-11） PASS
-      高斯 a（amp=1, sigma=4） 一步投影：max|div v|/max|v| = 7.311e-12
+      高斯 a（amp=1, sigma=4） 一步投影：max|div v|/max|v| = 7.305e-12
   V4 高斯 a（amp=1, sigma=4）：一步投影后 div v = 0 PASS
   V1 球状 a（amp=1, R=6）：L*1 = 0（逐位）        PASS
       球状 a（amp=1, R=6） 对称性 (Lp,q)=-1.144713e+02  (p,Lq)=-1.144713e+02  相对差 0.000e+00
@@ -26,7 +28,7 @@
       球状 a（amp=1, R=6） 往返：max|(p-p_ref)-mean| = 2.948e-12   PCG 迭代 14   |Σb|=0.00e+00   残差 1.67e-13
   V3 球状 a（amp=1, R=6）：变系数算子往返      PASS
   V5 球状 a（amp=1, R=6）：PCG 收敛（迭代 < 200，相对残差 < 1e-11） PASS
-      球状 a（amp=1, R=6） 一步投影：max|div v|/max|v| = 3.203e-12
+      球状 a（amp=1, R=6） 一步投影：max|div v|/max|v| = 3.199e-12
   V4 球状 a（amp=1, R=6）：一步投影后 div v = 0  PASS
   V1 强对比 a（amp=3, R=5）：L*1 = 0（逐位）     PASS
       强对比 a（amp=3, R=5） 对称性 (Lp,q)=-2.175512e+01  (p,Lq)=-2.175512e+01  相对差 1.306e-15
@@ -34,7 +36,7 @@
       强对比 a（amp=3, R=5） 往返：max|(p-p_ref)-mean| = 1.166e-11   PCG 迭代 18   |Σb|=0.00e+00   残差 3.20e-13
   V3 强对比 a（amp=3, R=5）：变系数算子往返   PASS
   V5 强对比 a（amp=3, R=5）：PCG 收敛（迭代 < 200，相对残差 < 1e-11） PASS
-      强对比 a（amp=3, R=5） 一步投影：max|div v|/max|v| = 8.085e-12
+      强对比 a（amp=3, R=5） 一步投影：max|div v|/max|v| = 8.079e-12
   V4 强对比 a（amp=3, R=5）：一步投影后 div v = 0 PASS
 
 全部通过

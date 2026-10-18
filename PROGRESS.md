@@ -13,7 +13,7 @@
 **2026-10-17 密度对比改造已完成**：`ratio_rho = ρ_p/ρ_ℓ` 成为必填项，密度场
 `ρ(r)=1+(ratio_rho-1)Σφ` 进入动量方程与压力投影（变系数 `div(a grad p)`，FFT 预条件
 PCG），重力改为体力 `(ρ-1)g` 并退出 `compute_particle_forces`。新判据
-`--check-mass`（MA1–MA7）与 `--check-poisson` 的 V1–V5 全绿；密度关闭路径与 HEAD
+`--check-mass`（MA1–MA7）与 `--check-poisson` 的 V0–V5 全绿；密度关闭路径与 HEAD
 在 W5b 上逐位一致；密度关闭路径与变系数路径（ratio_rho=2、非零重力、N=1）的
 5 步 vs 2+3 步重启都逐位相同。详见文末「密度对比」一节。
 绝对 Stokes 阻力仍归 Phase 4 的 L 外推；λ^T 仍未进力投影（只测量）。
@@ -992,12 +992,33 @@ plan 时以错误 5 中止。因此 W3b/W5b 和无噪声检查点逐位对照仍
 rho(r) = 1 + (ratio_rho - 1) * sum_i phi_i(r)      rho_l = 1
 rho (d_t v + (v.grad) v) = -grad p + div[eta (grad v + grad v^T)] - div(sigma) + (rho-1) g
 div v = 0
-v* = v + dt * a * (-div Pi + f),   a = 1/rho（面心）
+v* = v + dt * [ -(v.grad)v + a * (div tau + div sigma_noise + f) ],   a = 1/rho（面心）
 div(a grad p) = (1/dt) div v*,     v = v* - dt * a * grad p
 ```
 
+⚠️ **1/ρ 只乘力密度，不乘对流加速度**。ρDv/Dt 两边除以 ρ 后对流项在左边、系数是 1；
+把整个 `-div Pi + f` 都乘 1/ρ 会得到 ρ∂_t v + ∇·(vv) = ...，既不是非守恒形式也不是
+守恒形式（均匀密度反例：对流加速度会小 1/ρ 倍）。见下面的「修正记录」。
+
 重力的均匀项 ρ_l g 被静压解析减掉（Boussinesq 拆分，代数上精确；变系数投影无法
 精确吸收均匀体力，所以必须显式减）。粒子净重力自动是 (ρ_p-ρ_l)∫φ g。
+
+### 修正记录（2026-10-17，blog 审查发现）
+
+初版把显式步写成 `v* = v + dt*a*(-div Pi + f)`，把对流项也乘了 1/ρ。用户改 blog 时
+发现并给出均匀密度反例；已改为：
+
+```cpp
+// Stokes.cpp §3a：d_pix 仍是总通量散度（W6 的 Pi_zz 用它），拆成
+//   d_adv  = div(v (x) v)              // 不乘 a
+//   d_visc = d_pix - d_adv             // 粘性 + 噪声，乘 a
+tmp_fx[ijk] = vx[ijk] + DT * (-adv_x + inv_rho_x[ijk] * (-(d_pix - adv_x) + fx[ijk]));
+```
+
+对流通量由 `conv_xx/conv_xy/...` 唯一实现，§2a/§2b 与 §3a 同源，所以
+`d_visc = d_pix - d_adv` 精确等于粘性+噪声散度（a≡1 时逐位退化）。新增判据
+**V0**：均匀 a（0.5 vs 1.0）、η=f=0 时 `v*` 必须与 a 无关，实测**逐位 0**；
+修正前会差一个因子 a。`density_on=0` 仍走原合并路径，W3/W5b/W6 与 HEAD 逐位一致。
 
 ### 实现
 
@@ -1007,8 +1028,9 @@ div(a grad p) = (1/dt) div v*,     v = v* - dt * a * grad p
 - **`Poisson.cpp` 新增变系数路径**：`apply_laplacian_var`（`div(a grad p)`，壁面
   Neumann 与常系数算子同构）+ `solve_pressure_var`（PCG，预条件器 B = -a_bar·M，
   M 直接复用 `solve_pressure`；固定 p0=0 保逐位重启；容差 1e-12，上限 200）。
-- **`Stokes.cpp`**：显式步与修正步乘面心 a；`density_on=1` 走 PCG，否则原直解。
-  返回迭代数供主循环日志统计。
+- **`Stokes.cpp`**：显式步把总通量散度拆成 `d_adv`（不乘 a）与 `d_visc = d_pix - d_adv`
+  （粘性+噪声，乘 a）；对流通量由 `conv_*` 唯一实现，§2a/§2b/§3a 同源。
+  `density_on=1` 走 PCG，否则原直解。返回迭代数供主循环日志统计。
 - **重力迁出粒子力**：`compute_particle_forces/_cpu` 删除 `ExternalField ext` 形参；
   `ExternalField` 移到 `Common.h`，语义改为**加速度**。主循环顺序
   `forces → [ckpt/log] → viscosity → mass → force_field → gravity → NS`。
@@ -1030,10 +1052,11 @@ div(a grad p) = (1/dt) div v*,     v = v* - dt * a * grad p
 | MA5/MA6 | N=0 与 d_rho=0 时 a≡1、f_g≡0 | 逐位 | 逐位 |
 | MA7 | `F_wall(z_rest) + d_rho S1z(z_rest) g_z = 0` | 残差 6.3e-14，z_rest=4.719145 | < 1e-10·F_g |
 
-`--check-poisson` 的 V1–V5（16³，三种 a 场：高斯、球、强对比）：
+`--check-poisson` 的 V0–V5（16³，三种 a 场：高斯、球、强对比）：
 
 | # | 判据 | 实测 | 阈值 |
 |---|---|---|---|
+| V0 | 均匀 a（0.5 vs 1.0）、η=f=0：v* 与 a 无关 | **逐位 0** | 逐位 |
 | V1 | L·1 = 0 | 逐位 0 | 逐位 |
 | V2 | (Lp,q)=(p,Lq) | 0 ~ 7e-16 | < 1e-12 |
 | V3 | 往返（解 vs p_ref，零均值差） | 2.9e-12 ~ 1.2e-11 | < 1e-10 |

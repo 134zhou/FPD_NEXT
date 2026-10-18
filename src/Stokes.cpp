@@ -1,6 +1,51 @@
 #include "Stokes.h"
 #include "Poisson.h"
 
+// ============================================================================
+// 对流通量 v⊗v 的【唯一实现】。§2a/§2b 用它写 Π，§3a 用它把对流散度从
+// 总通量散度里拆出来（变密度时需要单独处理对流项，见 §3a 的说明）。
+// 两处必须逐字同源：先算的面心速度（半格平均）再相乘，不能一处用 (a+b)*0.5、
+// 另一处用 0.5*(a+b) 之外的任何重排 —— 拆出来的 d_visc 才与 Π 的粘性部分严格一致。
+// ============================================================================
+#pragma acc routine seq
+static inline double conv_xx(double v0, double v1)
+{
+    const double v = (v0 + v1) * 0.5;
+    return v * v;
+}
+
+#pragma acc routine seq
+static inline double conv_yy(double v0, double v1)
+{
+    const double v = (v0 + v1) * 0.5;
+    return v * v;
+}
+
+#pragma acc routine seq
+static inline double conv_zz(double v0, double v1)
+{
+    const double v = (v0 + v1) * 0.5;
+    return v * v;
+}
+
+#pragma acc routine seq
+static inline double conv_xy(double vx0, double vx1, double vy0, double vy1)
+{
+    return ((vx0 + vx1) * 0.5) * ((vy0 + vy1) * 0.5);
+}
+
+#pragma acc routine seq
+static inline double conv_xz(double vz0, double vz1, double vx0, double vx1)
+{
+    return ((vz0 + vz1) * 0.5) * ((vx0 + vx1) * 0.5);
+}
+
+#pragma acc routine seq
+static inline double conv_yz(double vy0, double vy1, double vz0, double vz1)
+{
+    return ((vy0 + vy1) * 0.5) * ((vz0 + vz1) * 0.5);
+}
+
 int step_navier_stokes
 (
     NS_Config cfg,
@@ -67,27 +112,22 @@ int step_navier_stokes
                 const int km = (k - 1 + Nz) % Nz;
                 const int ijk = IDX(i, j, k);
 
-                // 正应力分量：体心 (i,j,k)
-                double vax = (vx[ijk] + vx[IDX(im, j, k)]) * 0.5;
-                double vay = (vy[ijk] + vy[IDX(i, jm, k)]) * 0.5;
-                double vaz = (vz[ijk] + vz[IDX(i, j, km)]) * 0.5;
-
-                pi_dx[ijk] = vax * vax;
+                // 正应力分量：体心 (i,j,k)。对流项用 conv_*（与 §3a 的拆分同源）
+                pi_dx[ijk] = conv_xx(vx[ijk], vx[IDX(im, j, k)]);
                 pi_dx[ijk] -= eta[ijk] * 2.0 * (vx[ijk] - vx[IDX(im, j, k)]);
                 pi_dx[ijk] -= sqrt(2.0 * eta[ijk]) * cfg.W * randD[0 * size + ijk];
 
-                pi_dy[ijk] = vay * vay;
+                pi_dy[ijk] = conv_yy(vy[ijk], vy[IDX(i, jm, k)]);
                 pi_dy[ijk] -= eta[ijk] * 2.0 * (vy[ijk] - vy[IDX(i, jm, k)]);
                 pi_dy[ijk] -= sqrt(2.0 * eta[ijk]) * cfg.W * randD[1 * size + ijk];
 
-                pi_dz[ijk] = vaz * vaz;
+                pi_dz[ijk] = conv_zz(vz[ijk], vz[IDX(i, j, km)]);
                 pi_dz[ijk] -= eta[ijk] * 2.0 * (vz[ijk] - vz[IDX(i, j, km)]);
                 pi_dz[ijk] -= sqrt(2.0 * eta[ijk]) * cfg.W * randD[2 * size + ijk];
 
                 // Πxy (pi_nz)：XY 棱 (i+1/2,j+1/2,k)
-                double vsx_y = (vx[ijk] + vx[IDX(i, jp, k)]) * 0.5;
-                double vsy_x = (vy[ijk] + vy[IDX(ip, j, k)]) * 0.5;
-                pi_nz[ijk] = vsx_y * vsy_x;
+                pi_nz[ijk] = conv_xy(vx[ijk], vx[IDX(i, jp, k)],
+                                     vy[ijk], vy[IDX(ip, j, k)]);
                 pi_nz[ijk] -= etaXY[ijk] * ((vx[IDX(i, jp, k)] - vx[ijk])
                                            + (vy[IDX(ip, j, k)] - vy[ijk]));
                 pi_nz[ijk] -= sqrt(etaXY[ijk]) * cfg.W * randN[0 * esize + ijk];
@@ -110,17 +150,15 @@ int step_navier_stokes
                 const int eb  = wz_edge_idx(cfg, i,  j,  k);
 
                 // Πyz (pi_nx)：YZ 棱 (i,j+1/2,k+1/2)
-                double vsy_z = (vy[ijk] + vy[IDX(i, j, k + 1)]) * 0.5;
-                double vsz_y = (vz[ijk] + vz[IDX(i, jp, k)]) * 0.5;
-                pi_nx[eb] = vsy_z * vsz_y;
+                pi_nx[eb] = conv_yz(vy[ijk], vy[IDX(i, j, k + 1)],
+                                    vz[ijk], vz[IDX(i, jp, k)]);
                 pi_nx[eb] -= etaYZ[eb] * ((vy[IDX(i, j, k + 1)] - vy[ijk])
                                         + (vz[IDX(i, jp, k)] - vz[ijk]));
                 pi_nx[eb] -= sqrt(etaYZ[eb]) * cfg.W * randN[1 * esize + eb];
 
                 // Πzx (pi_ny)：ZX 棱 (i+1/2,j,k+1/2)
-                double vsz_x = (vz[ijk] + vz[IDX(ip, j, k)]) * 0.5;
-                double vsx_z = (vx[ijk] + vx[IDX(i, j, k + 1)]) * 0.5;
-                pi_ny[eb] = vsz_x * vsx_z;
+                pi_ny[eb] = conv_xz(vz[ijk], vz[IDX(ip, j, k)],
+                                    vx[ijk], vx[IDX(i, j, k + 1)]);
                 pi_ny[eb] -= etaZX[eb] * ((vz[IDX(ip, j, k)] - vz[ijk])
                                         + (vx[IDX(i, j, k + 1)] - vx[ijk]));
                 pi_ny[eb] -= sqrt(etaZX[eb]) * cfg.W * randN[2 * esize + eb];
@@ -159,13 +197,16 @@ int step_navier_stokes
         }
     }
 
-    // --- 3a. 显式一步：v* = v + dt·a·(-∇·Π + f) -------------------------
+    // --- 3a. 显式一步：v* = v + dt·[ -(v·∇)v + a·(-∇·τ_vis - ∇·noise + f) ] ---
     // 每个面心只算【一次】(∇·Π)_α，直接写 tmp_fα = v*（tmp_f* 复用为 v* 的存储，
     // 零额外显存）。原实现把每个面算了两次（d_pix_ijk 与左邻的 d_pix_im 是同一个量），
     // 这里消掉重复，Π 的读取减半 —— 正对 README 记录的缓存瓶颈。
     //
-    // a = 1/rho 在面心（Mass.cpp 建）。density_on=0 时 a 恒 1.0，
-    // 乘 1.0 是逐位恒等，所以常密度路径的结果不变。
+    // ⚠️ 1/rho 只乘【力密度】，不乘对流加速度。ρDv/Dt 两边除以 ρ 后对流项在左边、
+    //    系数是 1；把整个 ∇·Π 都乘 a 会得到 ρ∂t v + ∇·(vv) = ...，既不是非守恒形式
+    //    也不是守恒形式（tmp.txt 的 V0 反例：均匀 a 下对流加速度会被错误地缩放）。
+    //    d_pix 仍是总通量散度（W6 的动量收支用它的 Π_zz），这里把它拆成
+    //    d_adv（对流）与 d_visc = d_pix - d_adv（粘性+噪声）。
     #pragma acc parallel loop collapse(3) present(vx, vy, vz, fx, fy, fz, inv_rho_x, inv_rho_y, inv_rho_z, pi_dx, pi_dy, pi_dz, pi_nx, pi_ny, pi_nz, tmp_fx, tmp_fy, tmp_fz)
     for (int i = 0; i < Nx; i++)
     {
@@ -200,9 +241,69 @@ int step_navier_stokes
                              + (pi_nx[eb] - pi_nx[ebjm])
                              + (pi_dz[IDX(i, j, kp)] - pi_dz[ijk]);
 
-                tmp_fx[ijk] = vx[ijk] + DT * inv_rho_x[ijk] * (-d_pix + fx[ijk]);   // v*x
-                tmp_fy[ijk] = vy[ijk] + DT * inv_rho_y[ijk] * (-d_piy + fy[ijk]);   // v*y
-                tmp_fz[ijk] = vz[ijk] + DT * inv_rho_z[ijk] * (-d_piz + fz[ijk]);   // v*z
+                // --- 变密度：对流项【不】乘 1/rho ---
+                // 非守恒形式 rho(∂t v + (v·∇)v) = -∇p + ∇·τ + f 除以 rho 后是
+                //   ∂t v = -(v·∇)v + a(∇·τ + ∇·noise + f)
+                // 对流项是加速度，不带 a；只有粘性/噪声/外力这些力密度带 a。
+                // 代码里 d_pi = ∇·Π = d_adv + d_visc（d_visc = ∇·(-τ - noise)），
+                // 所以 v* = v + dt[ -d_adv + a(-d_visc + f) ]。
+                // density_on=0 时保留原来的合并写法（与 HEAD 逐位相同）。
+                if (cfg.density_on)
+                {
+                    const int km = (k - 1 + Nz) % Nz;
+                    const double cxx_i  = conv_xx(vx[ijk], vx[IDX(im, j, k)]);
+                    const double cxx_ip = conv_xx(vx[IDX(ip, j, k)], vx[ijk]);
+                    const double cyy_i  = conv_yy(vy[ijk], vy[IDX(i, jm, k)]);
+                    const double cyy_jp = conv_yy(vy[IDX(i, jp, k)], vy[ijk]);
+                    const double czz_i  = conv_zz(vz[ijk], vz[IDX(i, j, km)]);
+                    const double czz_kp = conv_zz(vz[IDX(i, j, kp)], vz[ijk]);
+
+                    const double cxy_i  = conv_xy(vx[ijk], vx[IDX(i, jp, k)],
+                                                  vy[ijk], vy[IDX(ip, j, k)]);
+                    const double cxy_jm = conv_xy(vx[IDX(i, jm, k)], vx[ijk],
+                                                  vy[IDX(i, jm, k)], vy[IDX(ip, jm, k)]);
+                    const double cxy_im = conv_xy(vx[IDX(im, j, k)], vx[IDX(im, jp, k)],
+                                                  vy[IDX(im, j, k)], vy[ijk]);
+
+                    // ZX 棱（pi_ny）：eb 在 k、ebkm 在 k-1、ebim 在 (i-1,j,k)。
+                    // 壁面棱边（逻辑 k=-1 / Nz-1）的对流项恒为 0（§2c 只写粘性+噪声）。
+                    const double cxz_eb   = (k == Nz - 1) ? 0.0
+                        : conv_xz(vz[ijk], vz[IDX(ip, j, k)], vx[ijk], vx[IDX(i, j, k + 1)]);
+                    const double cxz_ebkm = (k == 0) ? 0.0
+                        : conv_xz(vz[IDX(i, j, k - 1)], vz[IDX(ip, j, k - 1)],
+                                  vx[IDX(i, j, k - 1)], vx[ijk]);
+                    const double cxz_ebim = (k == Nz - 1) ? 0.0
+                        : conv_xz(vz[IDX(im, j, k)], vz[ijk],
+                                  vx[IDX(im, j, k)], vx[IDX(im, j, k + 1)]);
+
+                    // YZ 棱（pi_nx）：eb 在 k、ebkm 在 k-1、ebjm 在 (i,j-1,k)
+                    const double cyz_eb   = (k == Nz - 1) ? 0.0
+                        : conv_yz(vy[ijk], vy[IDX(i, j, k + 1)], vz[ijk], vz[IDX(i, jp, k)]);
+                    const double cyz_ebkm = (k == 0) ? 0.0
+                        : conv_yz(vy[IDX(i, j, k - 1)], vy[ijk],
+                                  vz[IDX(i, j, k - 1)], vz[IDX(i, jp, k - 1)]);
+                    const double cyz_ebjm = (k == Nz - 1) ? 0.0
+                        : conv_yz(vy[IDX(i, jm, k)], vy[IDX(i, jm, k + 1)],
+                                  vz[IDX(i, jm, k)], vz[ijk]);
+
+                    const double adv_x = (cxx_ip - cxx_i) + (cxy_i - cxy_jm) + (cxz_eb - cxz_ebkm);
+                    const double adv_y = (cxy_i - cxy_im) + (cyy_jp - cyy_i) + (cyz_eb - cyz_ebkm);
+                    const double adv_z = (cxz_eb - cxz_ebim) + (cyz_eb - cyz_ebjm) + (czz_kp - czz_i);
+
+                    const double dvx = d_pix - adv_x;
+                    const double dvy = d_piy - adv_y;
+                    const double dvz = d_piz - adv_z;
+
+                    tmp_fx[ijk] = vx[ijk] + DT * (-adv_x + inv_rho_x[ijk] * (-dvx + fx[ijk]));
+                    tmp_fy[ijk] = vy[ijk] + DT * (-adv_y + inv_rho_y[ijk] * (-dvy + fy[ijk]));
+                    tmp_fz[ijk] = vz[ijk] + DT * (-adv_z + inv_rho_z[ijk] * (-dvz + fz[ijk]));
+                }
+                else
+                {
+                    tmp_fx[ijk] = vx[ijk] + DT * (-d_pix + fx[ijk]);
+                    tmp_fy[ijk] = vy[ijk] + DT * (-d_piy + fy[ijk]);
+                    tmp_fz[ijk] = vz[ijk] + DT * (-d_piz + fz[ijk]);
+                }
 
                 // 壁面法向面【永不修正】：v*z 在两壁钉死为 0。
                 // ⚠️ 这个置 0 是【承重的】：上面体心段的 km=(k-1+Nz)%Nz 与下面

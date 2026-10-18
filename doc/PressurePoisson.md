@@ -699,11 +699,20 @@ h_top    = (Nz - 1/2 - z) - a
 $$\rho\left(\partial_t\mathbf v+(\mathbf v\cdot\nabla)\mathbf v\right)
 =-\nabla p+\nabla\cdot\left[\eta(\nabla\mathbf v+\nabla\mathbf v^T)\right]-\nabla\cdot\tilde\sigma+\mathbf f+(\rho-1)\mathbf g$$
 
-取 $a=1/\rho$（面心），显式步与修正步是
+取 $a=1/\rho$（面心）。**$1/\rho$ 只乘力密度，不乘对流加速度**：
+$\rho Dv/Dt$ 两边除以 $\rho$ 后，对流项在左边、系数是 1。记
+$\Pi_{\rm visc}=\tau+\tilde\sigma$（粘性+噪声应力），显式步、修正步与压力方程是
 
-$$\mathbf v^*=\mathbf v+dt\,a\left(-\nabla\cdot\Pi+\mathbf f_g+\mathbf f\right),\qquad
-\mathbf v=\mathbf v^*-dt\,a\nabla p,\qquad
+$$\mathbf v^*=\mathbf v+dt\left[-\nabla\cdot(\mathbf v\otimes\mathbf v)
++\frac1\rho\left(\nabla\cdot\Pi_{\rm visc}+\mathbf f_g+\mathbf f\right)\right],
+\qquad
+\mathbf v=\mathbf v^*-dt\,a\nabla p,
+\qquad
 \nabla\cdot(a\nabla p)=\frac1{dt}\nabla\cdot\mathbf v^*$$
+
+代码里 `d_pi = ∇·(vv - Π_visc)` 是总通量散度，§3a 把它拆成
+`d_adv = ∇·(vv)`（不乘 $a$）与 `d_visc = d_pi - d_adv`（乘 $a$）。
+均匀 $a$ 下 $\mathbf v^*$ 必须与 $a$ 无关 —— 这是判据 **V0**。
 
 离散与常系数路径**同一套 stencil、同一套 BC**，只把面心的 1 换成 $a$：
 
@@ -747,16 +756,20 @@ $a\equiv1$ 时它逐位退化成 §5 的 `div∘grad`。零空间仍是常向量
 （$a$ 的相对起伏本身很大），它是零成本的保险，不是救命稻草。
 真正要降成本需要两级预条件或几何多重网格 —— **未立项**。
 
-### 16.4 判据（`--check-poisson` 的 V1–V5）
+### 16.4 判据（`--check-poisson` 的 V0–V5）
 
 | # | 内容 | 实测 | 阈值 |
 | --- | --- | --- | --- |
+| V0 | 均匀 $a$（0.5 vs 1.0）、$\eta=f=0$：$\mathbf v^*$ 与 $a$ 无关 | **逐位 0** | 逐位 |
 | V1 | $L\mathbf 1=0$ | 逐位 0 | 逐位 |
 | V2 | $(Lp,q)=(p,Lq)$（非均匀 $a$） | 0 ~ 7e-16 | < 1e-12 |
 | V3 | 往返 $b=Lp_{\rm ref}$，解的零均值差 | 3e-12 ~ 1.2e-11 | < 1e-10 |
 | V4 | 一步完整投影后 $\max\lvert\nabla\cdot v\rvert/\max\lvert v\rvert$ | 3e-12 ~ 8e-12 | < 1e-10 |
 | V5 | PCG 迭代数 / 相对残差 | 14–18 / 2e-13 ~ 3e-13 | < 200 / < 1e-11 |
 
+V0 是「$1/\rho$ 有没有被错乘到对流项上」的判决性判据：均匀密度下非守恒方程的
+对流系数必须是 1，所以 $\mathbf v^*$ 与 $a$ 无关。修正前的代码会把 $\mathbf v^*$
+差一个因子 $a$，V0 直接抓到（实测为 1 vs 0.5）。
 V3 的阈值 1e-10 而不是 1e-11：强对比（$a$ 从 0.25 到 1）时算子的条件数把
 1e-12 的残差放大到 ~1e-11 的解误差，这是精度上限，不是 bug。V4 直接量
 「算子与修正步是否匹配」，是 §13 第 1 条盲区的正解。

@@ -110,7 +110,7 @@ v3 文件头只含尺寸、粒子数和 step，v2 文件明确拒绝。VTK 转�
 | 粒子间相互作用力 | ✅ WCA / Morse / LJ12-6（重力是体力，不在粒子力里） |
 | 多粒子 / 初始构型 | ✅ `tools/make_init.py` 生成 `.fpd` |
 | 热噪声按 kT 标定 | ⚠️ 3A/3B 判据已删（周期专属），结论见 `PROGRESS.md` 覆盖损失 |
-| 密度对比 `ratio_rho` | ✅ 变密度惯性 + 变系数压力投影（PCG）+ 重力体力；`--check-mass` MA1–MA7 |
+| 密度对比 `ratio_rho` | ✅ 变密度惯性 + 变系数压力投影（PCG）+ 重力体力；`--check-mass` MA1–MA7、`--check-poisson` V0–V5 |
 | λ^T / M_i / M_eq 常量表 | ✅ `--lambda` 只测量；**λ^T 未进力投影**，缺口见 `PROGRESS.md` |
 | 配置文件 / checkpoint | ✅ Phase 2 完成，重启逐位复现 |
 | 可视化 | ✅ `tools/fpd2vtk.py` 离线转 VTK（ParaView 开一个 .pvd） |
@@ -330,7 +330,7 @@ J6 势特征点 + POT_NONE 零判据 + 标号交换对称性
 ./build/fpd_check --check             # 力守恒 + 亚格点不变性 + 多粒子重叠 + 力链路
 ./build/fpd_check --check-potential   # 势函数自检（纯 CPU，无卡可跑）
 ./build/fpd_check --check-tridiag     # 三对角 vs 稠密 Gauss（纯 CPU）
-./build/fpd_check --check-poisson     # 壁面算子往返 + 变系数投影 V1-V5（需 GPU）
+./build/fpd_check --check-poisson     # 壁面算子往返 + 变系数投影 V0-V5（需 GPU）
 ./build/fpd_check --check-wall        # z 向壁面判据 W1/W2/W3/W3b/W4/W4s/W6/W5b/W8（需 GPU）
 ./build/fpd_check --check-mass        # 质量密度场 MA1-MA7（需 GPU）
 ./build/fpd_check --lambda 32 2.0     # 常量表 [L] [ratio_rho]（纯 CPU，秒级）

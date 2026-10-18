@@ -346,7 +346,7 @@ static void check_compat_diag()
 }
 
 // ============================================================================
-// 变系数投影判据 V1-V5（需 GPU）
+// 变系数投影判据 V0-V5（需 GPU）
 //
 // a 场用解析函数（高斯或球），不依赖 Mass.cpp —— 这样「算子/PCG」与「密度场」
 // 是两套独立判据，各自能被单独判死。
@@ -379,6 +379,84 @@ static double dot_host(const std::vector<double>& x, const std::vector<double>& 
     double s = 0.0;
     for (size_t t = 0; t < x.size(); t++) { s += x[t] * y[t]; }
     return s;
+}
+
+// ============================================================================
+// V0：对流加速度【不】随 1/rho 缩放。
+//
+// 合成均匀 a、eta=0、f=0、p=0 的构型，跑一步显式步，比较 v*（tmp_f）。
+// 均匀密度下非守恒方程是 ∂t v + (v·∇)v = 0，所以 v* 必须与 a 无关。
+// 修正前把整个括号乘 a，v* 会差一个因子 a；这条判据就是抓它的。
+// ============================================================================
+static void v0_run_step(FpdState& st, double a,
+                        const std::vector<double>& vx0, const std::vector<double>& vy0,
+                        const std::vector<double>& vz0,
+                        std::vector<double>& ox, std::vector<double>& oy, std::vector<double>& oz)
+{
+    const size_t size = st.size;
+    for (size_t t = 0; t < size; t++)
+    {
+        st.h_vx[t] = vx0[t]; st.h_vy[t] = vy0[t]; st.h_vz[t] = vz0[t];
+        st.h_fx[t] = 0.0; st.h_fy[t] = 0.0; st.h_fz[t] = 0.0;
+        st.h_inv_rho_x[t] = a; st.h_inv_rho_y[t] = a; st.h_inv_rho_z[t] = a;
+    }
+    // eta=0：只留下对流项（噪声 W=0 已在 make_ns_config 里关掉）
+    std::fill(st.h_eta.begin(), st.h_eta.end(), 0.0);
+    std::fill(st.h_etaXY.begin(), st.h_etaXY.end(), 0.0);
+    std::fill(st.h_etaYZ.begin(), st.h_etaYZ.end(), 0.0);
+    std::fill(st.h_etaZX.begin(), st.h_etaZX.end(), 0.0);
+    st.upload(ST_VELOCITY | ST_PHI);
+
+    step_navier_stokes(st.cfg, st.vx, st.vy, st.vz, st.p,
+                       st.fx, st.fy, st.fz,
+                       st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
+                       st.cg_r, st.cg_s, st.cg_zq,
+                       st.eta, st.etaXY, st.etaYZ, st.etaZX,
+                       st.pi_dx, st.pi_dy, st.pi_dz,
+                       st.pi_nx, st.pi_ny, st.pi_nz,
+                       st.fft, st.plan_xy, st.tri_w, st.diag,
+                       st.gen, st.randD, st.randN,
+                       st.tmp_fx, st.tmp_fy, st.tmp_fz, 0L);
+
+    #pragma acc update self(st.tmp_fx[0:size])
+    #pragma acc update self(st.tmp_fy[0:size])
+    #pragma acc update self(st.tmp_fz[0:size])
+    ox.assign(st.tmp_fx, st.tmp_fx + size);
+    oy.assign(st.tmp_fy, st.tmp_fy + size);
+    oz.assign(st.tmp_fz, st.tmp_fz + size);
+}
+
+static void v0_convection_independent_of_a(int Nx, int Ny, int Nz)
+{
+    const size_t size = (size_t)Nx * Ny * Nz;
+    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.002, 0.0, false);
+    cfg.density_on = 1;
+
+    FpdState st;
+    st.init(cfg, 0, ST_FULL, 20261018ULL);
+
+    std::vector<double> vx0(size), vy0(size), vz0(size);
+    fill_rand(vx0, 777u); fill_rand(vy0, 888u); fill_rand(vz0, 999u);
+    for (int j = 0; j < Ny; j++)
+        for (int i = 0; i < Nx; i++) { vz0[(size_t)IDX(i, j, Nz - 1)] = 0.0; }
+
+    std::vector<double> ax, ay, az, bx, by, bz;
+    v0_run_step(st, 0.5, vx0, vy0, vz0, ax, ay, az);
+    v0_run_step(st, 1.0, vx0, vy0, vz0, bx, by, bz);
+
+    double dmax = 0.0, vmax = 0.0;
+    for (size_t t = 0; t < size; t++)
+    {
+        dmax = std::fmax(dmax, std::fabs(ax[t] - bx[t]));
+        dmax = std::fmax(dmax, std::fabs(ay[t] - by[t]));
+        dmax = std::fmax(dmax, std::fabs(az[t] - bz[t]));
+        vmax = std::fmax(vmax, std::fmax(std::fabs(bx[t]),
+                             std::fmax(std::fabs(by[t]), std::fabs(bz[t]))));
+    }
+    const double rel = vmax > 0.0 ? dmax / vmax : dmax;
+    std::printf("      V0 均匀 a=0.5 vs a=1.0：max|Δv*|/max|v*| = %.3e\n", rel);
+    check(rel == 0.0, "V0 对流加速度与均匀 a 无关（v* 逐位相同）");
+    st.finish();
 }
 
 // 用给定的 a 场跑一遍「往返 + 对称 + 修正步散度」。
@@ -555,6 +633,7 @@ int run_check_poisson(int Nx, int Ny, int Nz)
         check_compat_diag();
 
         std::printf("\n--- 变系数投影（div(a grad p)）---\n");
+        v0_convection_independent_of_a(8, 6, 5);
         var_poisson_battery(16, 16, 16, "高斯 a（amp=1, sigma=4）", 1.0, 4.0, false, 0.0);
         var_poisson_battery(16, 16, 16, "球状 a（amp=1, R=6）",        1.0, 0.0, true, 6.0);
         var_poisson_battery(16, 16, 16, "强对比 a（amp=3, R=5）",      3.0, 0.0, true, 5.0);
@@ -563,6 +642,7 @@ int run_check_poisson(int Nx, int Ny, int Nz)
     {
         g_fail += roundtrip_grid(Nx, Ny, Nz, "壁面算子往返");
         check_compat_diag();
+        v0_convection_independent_of_a(8, 6, 5);
         var_poisson_battery(Nx, Ny, Nz, "高斯 a（amp=1, sigma=4）", 1.0, 4.0, false, 0.0);
     }
 

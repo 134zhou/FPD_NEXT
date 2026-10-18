@@ -344,10 +344,17 @@ $$\rho(\mathbf r)=1+(ratio\_rho-1)\sum_i\phi_i(\mathbf r),\qquad a(\mathbf r)=\f
 
 三件事同时改变，且必须同时改：
 
-1. **惯性**：动量方程左端保留 $\rho$。压力投影变成
-   $\nabla\cdot(a\nabla p)=\frac1{dt}\nabla\cdot v^*$，$v=v^*-dt\,a\nabla p$。
-   $a$ 在面心，与力的摊布、$V_i$ 的归一化用同一个 `Loc`；$v^*$ 与修正步也用它。
-   这是 `Mass.cpp` 与 `Poisson.cpp` 变系数路径的职责。
+1. **惯性**：动量方程左端保留 $\rho$。显式步必须把对流项和力密度分开：
+   $$\mathbf v^*=\mathbf v+dt\left[-(\mathbf v\cdot\nabla)\mathbf v
+   +\frac1\rho\left(\nabla\cdot\tau+\nabla\cdot\tilde\sigma+\mathbf f\right)\right]$$
+   压力投影变成 $\nabla\cdot(a\nabla p)=\frac1{dt}\nabla\cdot v^*$，
+   $v=v^*-dt\,a\nabla p$。$a=1/\rho$ 在面心，与力的摊布、$V_i$ 的归一化用同一个
+   `Loc`。**$1/\rho$ 只乘力密度（粘性、噪声、外力、压力梯度），不乘对流加速度**：
+   $\rho Dv/Dt$ 两边除以 $\rho$ 后对流项在左边、系数是 1。把整个 $\nabla\cdot\Pi$
+   都乘 $1/\rho$ 会得到 $\rho\partial_t v+\nabla\cdot(vv)=\dots$，既不是非守恒
+   形式也不是守恒形式。这是 `Stokes.cpp` §3a 把总通量散度拆成 `d_adv`/`d_visc`
+   的原因；判据是 `--check-poisson` 的 V0。这是 `Mass.cpp` 与 `Poisson.cpp`
+   变系数路径的职责。
 2. **重力**：改为体力 $\rho\mathbf g$。均匀项 $\rho_\ell\mathbf g$ 被静压
    $\nabla p_h$ 解析减掉（代数上精确；变系数投影无法精确吸收均匀体力，所以必须
    显式减），净体密度是 $(\rho-\rho_\ell)\mathbf g$。粒子受到的净重力自动是
@@ -357,7 +364,7 @@ $$\rho(\mathbf r)=1+(ratio\_rho-1)\sum_i\phi_i(\mathbf r),\qquad a(\mathbf r)=\f
    $\rho$ 缩放）。$\lambda^T$ 缺口仍在（见 §3.3），本次只测量、不修。
 
 $ratio\_rho=1$ 时 $\rho\equiv1$、$a\equiv1$，变系数路径逐位退化成原常系数求解器
-（`--check-poisson` 的 V1–V5、`--check-mass` 的 MA1–MA7）。
+（`--check-poisson` 的 V0–V5、`--check-mass` 的 MA1–MA7）。
 **边界**：$\nabla\cdot v=0$ 与「密度场由粒子位置给定」意味着质量守恒的残差是
 $\partial_t\rho+v\cdot\nabla\rho=O(\xi/a)$，与 FPD 的界面近似同阶；这是对论文
 等密度假设的扩展，不是论文原定理。$\lambda^T$、粒子侧 FDT 仍是独立缺口。
@@ -390,7 +397,8 @@ $\partial_t\rho+v\cdot\nabla\rho=O(\xi/a)$，与 FPD 的界面近似同阶；这
 | $V_i = \int v\phi_i/\int\phi_i$ | `Velocity.cpp: update_particle_velocity()` |
 | $\mathbf f_g=(\rho-1)\mathbf g$ | `Mass.cpp: apply_gravity()` |
 | $\nabla\cdot(a\nabla p)=b$ + PCG | `Poisson.cpp: apply_laplacian_var` / `solve_pressure_var` |
-| $v^*=v+dt\,a(-\nabla\cdot\Pi+f)$、$v=v^*-dt\,a\nabla p$ | `Stokes.cpp` §3a / §5 |
+| $v^*=v+dt\,[-\nabla\cdot(vv)+a(-\nabla\cdot\Pi_{\rm visc}+f)]$、$v=v^*-dt\,a\nabla p$ | `Stokes.cpp` §3a / §5（1/ρ 只乘力密度） |
+| V0：对流项不随 $a$ 缩放 | `CheckPoisson.cpp: v0_convection_independent_of_a` |
 | $\lambda^{T}, M_i, M_{\rm eq}, M_{\rm eff}$ | `tests/Analysis.cpp: compute_fpd_constants()` |
 
 ## 6 下一步

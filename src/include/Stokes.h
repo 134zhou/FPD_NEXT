@@ -28,7 +28,9 @@
 // 返回变系数路径的 PCG 迭代数；常系数路径（density_on=0）返回 0。
 //
 // 密度参数：inv_rho_x/y/z 是面心 1/rho（Mass.cpp 建；density_on=0 时恒 1.0）。
-// 显式步与修正步都乘它；density_on=1 时压力方程解 div(a grad p)=b。
+// ⚠️ 1/rho 只乘【力密度】（粘性、噪声、外力、压力梯度），不乘对流加速度：
+//    显式步拆成 d_adv（不乘 a）与 d_visc = d_pix - d_adv（乘 a），修正步乘 a。
+//    density_on=1 时压力方程解 div(a grad p)=b；判据是 --check-poisson 的 V0。
 // 三个 cg_* 是 density_on=1 才分配的 PCG 暂存（=0 时可为 null，不被读取）。
 int step_navier_stokes(
     NS_Config cfg,

@@ -40,7 +40,7 @@ void solve_pressure(NS_Config cfg, double* fft_data, const double* tri_w,
 //     div( a grad p ) = (1/dt) div v*,     a = 1/rho（面心）
 //     v = v* - dt * a * grad p
 // 三处（算子、梯度、散度）必须用同一套面心 a 与同一套离散。这是 --check-poisson
-// 的 V1-V4 与 doc/PressurePoisson.md §16 共同定义的不变量。
+// 的 V0-V5 与 doc/PressurePoisson.md §16 共同定义的不变量。
 //
 // apply_laplacian_var 算的是 L p = div(a grad p)，L 对称半负定，零空间 = 常向量。
 // 离散：x/y 周期回绕；k=0 只保留 +a_z[0]*(p1-p0)，k=Nz-1 只保留

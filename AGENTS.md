@@ -69,6 +69,9 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
   `stencil_point<FACE_X/Y/Z>` 从 R 重算面心 `a = 1/rho`；不入 .fpd、不在别处重算。
   重力只能经 `Mass.cpp` 的 `apply_gravity` 以体力 (rho-rho_l)g 进入；
   `compute_particle_forces` 不含重力。
+- 变密度显式步：`1/rho` 只乘力密度（粘性、噪声、外力、压力梯度），**不乘对流加速度**。
+  `Stokes.cpp` §3a 把总通量散度拆成 `d_adv`（不乘 a）与 `d_visc = d_pix - d_adv`（乘 a）；
+  对流通量由 `conv_*` 唯一实现。改这段必须跑 `--check-poisson` 的 V0。
 - Stencil.h 是半格偏移、支撑域截断和模板回绕的唯一实现。
   模板盒 n_range = 2*range+1；投影与归一化使用同一位置和同一权重，各方向独立。
 - Wall.h 是 z 棱边存储、法向面钉死和 RNG 长度的唯一实现；棱边为 Nx*Ny*(Nz+1)，
@@ -77,7 +80,7 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
 - Poisson.cpp 与 doc/PressurePoisson.md §12 共同定义 div∘grad。
   变换归一化为 Nx*Ny；(0,0) 奇异列用 d_0 -= 1 定规，不能清空整列。
   `ratio_rho != 1` 时是变系数 div(a grad p)，由 §16 与 `solve_pressure_var` 共同定义；
-  改任一侧必须同步并重跑 --check-poisson 的 V1–V5。
+  改任一侧必须同步并重跑 --check-poisson 的 V0–V5。
 - 速度/噪声边界属于 Wall.h；粒子壁面力属于 Potential.h，二者分开维护。
   壁面力使用表面间隙 h，要求 h>0；不对负间隙 clamp，保留运行中越界中止。
 - 壁面剪切噪声幅度 ×√2 只作用于两壁的 EDGE_YZ/EDGE_ZX；公式见 §14。
@@ -94,7 +97,7 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
 |---|---|
 | Stencil、Viscosity、Force、Velocity、Potential.h | --check；相场加权须覆盖 N=2 重叠均匀流 |
 | Poisson.cpp（常系数） | --check-poisson 的 P5/P6；同步 PressurePoisson.md §12 |
-| Poisson.cpp（变系数/PCG） | --check-poisson 的 V1–V5；同步 PressurePoisson.md §16 |
+| Poisson.cpp（变系数/PCG） | --check-poisson 的 V0–V5；同步 PressurePoisson.md §16 |
 | Wall.h、Stokes.cpp、Viscosity.cpp | --check-wall；同步 PressurePoisson.md §14 |
 | Potential.h/.cpp、Wall.h、main.cpp 越界逻辑 | --check-wall，含 W8；壁面力改动同步 §15 |
 | Mass.cpp、ratio_rho、重力语义 | --check-mass（MA1–MA7）+ --check-wall（W8）；同步 ns-equation §3.4 与 README |
