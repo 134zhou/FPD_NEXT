@@ -8,6 +8,7 @@ add_executable(fpd_check
     CheckPoisson.cpp
     CheckWall.cpp
     CheckMass.cpp
+    CheckPcgNoise.cpp
 )
 target_link_libraries(fpd_check PRIVATE fpd_core)
 

@@ -7,6 +7,7 @@
 //   fpd_check --check-poisson [Nx Ny Nz]
 //   fpd_check --check-wall [Nx Ny Nz]
 //   fpd_check --debug-pcg [Nx Ny Nz]
+//   fpd_check --pcg-noise [Nx Ny Nz]
 //   fpd_check --check-mass [Nx Ny Nz]
 //   fpd_check --lambda [L] [ratio_rho]
 //
@@ -82,6 +83,15 @@ int main(int argc, char** argv)
         return run_debug_pcg(Px, Py, Pz);
     }
 
+    // PCG 误差 vs 热噪声：需 GPU
+    if (argc > 1 && std::strcmp(argv[1], "--pcg-noise") == 0)
+    {
+        const int Px = (argc > 2) ? std::atoi(argv[2]) : 0;
+        const int Py = (argc > 3) ? std::atoi(argv[3]) : 0;
+        const int Pz = (argc > 4) ? std::atoi(argv[4]) : 0;
+        return run_pcg_noise(Px, Py, Pz);
+    }
+
     // Phase 7-B 壁面判据：需 GPU（走 cuFFT），但不开噪声
     if (argc > 1 && std::strcmp(argv[1], "--check-wall") == 0)
     {
@@ -121,6 +131,7 @@ int main(int argc, char** argv)
               << "      fpd_check --check-poisson [Nx Ny Nz]\n"
               << "      fpd_check --check-wall [Nx Ny Nz]\n"
               << "      fpd_check --debug-pcg [Nx Ny Nz]\n"
+              << "      fpd_check --pcg-noise [Nx Ny Nz]\n"
               << "      fpd_check --check-mass [Nx Ny Nz]\n"
               << "      fpd_check --lambda [L] [ratio_rho]\n";
     return 2;
