@@ -50,7 +50,7 @@ int step_navier_stokes
 (
     NS_Config cfg,
     double* vx, double* vy, double* vz,
-    double* p, double* p_prev, int split_now,
+    double* p,
     double* fx, double* fy, double* fz,
     const double* inv_rho_x, const double* inv_rho_y, const double* inv_rho_z,
     double* cg_r, double* cg_s, double* cg_zq,
@@ -346,50 +346,8 @@ int step_navier_stokes
     // 变密度：div(a grad p) = b，用同一个 FFT 求解器作预条件器跑 PCG。
     // 数学推导与公式↔代码对照见 doc/PressurePoisson.md（变系数见 §16）。
     int cg_iter = 0;
-    const double rho0 = cfg.split_rho0;
-    const double a0   = 1.0 / rho0;
-    if (cfg.density_on && cfg.split && split_now)
+    if (cfg.density_on)
     {
-        // --- 压力分裂（Dodd & Ferrante 2014）---
-        // 把 a∇p 拆成 a0∇p^{n+1} + (a - a0)∇p̂，p̂ = 2pⁿ - pⁿ⁻¹ 是外推压力，a0 = 1/ρ0 = max a：
-        //   ∇²p^{n+1} = ρ0 b + ∇·[(1 - ρ0 a)∇p̂]          （常系数，直接 solve_pressure）
-        //   v^{n+1}   = v* - dt[a0∇p^{n+1} + (a - a0)∇p̂]
-        // 散度、梯度、Laplacian 与 PCG 路径同一套离散，所以 div v^{n+1} 到机器精度；
-        // 误差在动量里（p̂ 与真压力之差）。cg_r 暂存 p̂，cg_s 暂存右端修正项。
-        #pragma acc parallel loop collapse(3) present(p, p_prev, cg_r)
-        for (int i = 0; i < Nx; i++)
-            for (int j = 0; j < Ny; j++)
-                for (int k = 0; k < Nz; k++)
-                {
-                    const int ijk = IDX(i, j, k);
-                    cg_r[ijk]   = 2.0 * p[ijk] - p_prev[ijk];
-                    p_prev[ijk] = p[ijk];
-                }
-        apply_laplacian_affine(cfg, 1.0, -rho0, inv_rho_x, inv_rho_y, inv_rho_z, cg_r, cg_s);
-        #pragma acc parallel loop collapse(3) present(fft_data, cg_s)
-        for (int i = 0; i < Nx; i++)
-            for (int j = 0; j < Ny; j++)
-                for (int k = 0; k < Nz; k++)
-                {
-                    const int ijk = IDX(i, j, k);
-                    fft_data[2 * ijk]     = rho0 * fft_data[2 * ijk] + cg_s[ijk];
-                    fft_data[2 * ijk + 1] = 0.0;
-                }
-        solve_pressure(cfg, fft_data, tri_w, plan_xy, p, diag);
-        diag[1] = 0.0;      // 没有迭代残差；真残差见 diag[2]
-        #pragma acc update device(diag[1:1])
-    }
-    else if (cfg.density_on)
-    {
-        // 分裂法的前两步用 PCG 建立压力历史：解之前先把 pⁿ 移进 p_prev。
-        if (cfg.split)
-        {
-            #pragma acc parallel loop collapse(3) present(p, p_prev)
-            for (int i = 0; i < Nx; i++)
-                for (int j = 0; j < Ny; j++)
-                    for (int k = 0; k < Nz; k++) { p_prev[IDX(i, j, k)] = p[IDX(i, j, k)]; }
-        }
-
         // 把右端（fft_data 的实部）拷进 cg_r；solve_pressure_var 入口约定 = b。
         #pragma acc parallel loop collapse(3) present(fft_data, cg_r)
         for (int i = 0; i < Nx; i++)
@@ -414,55 +372,25 @@ int step_navier_stokes
     // --- 5. 修正步 (Correction / projection) ---
     // v^{n+1} = v* - dt·a·∇p，其中 v* 就是 tmp_f*，a = 1/rho 在面心。
     // 必须与上面的求解分成两个 kernel：p 的梯度要读相邻线程写的 p。
-    // 分裂法：v^{n+1} = v* - dt[a0∇p + (a - a0)∇p̂]，p̂ 在 cg_r。
-    if (cfg.density_on && cfg.split && split_now)
+    #pragma acc parallel loop collapse(3) present(vx, vy, vz, p, inv_rho_x, inv_rho_y, inv_rho_z, tmp_fx, tmp_fy, tmp_fz)
+    for (int i = 0; i < Nx; i++)
     {
-        #pragma acc parallel loop collapse(3) present(vx, vy, vz, p, cg_r, inv_rho_x, inv_rho_y, inv_rho_z, tmp_fx, tmp_fy, tmp_fz)
-        for (int i = 0; i < Nx; i++)
+        for (int j = 0; j < Ny; j++)
         {
-            for (int j = 0; j < Ny; j++)
+            for (int k = 0; k < Nz; k++)
             {
-                for (int k = 0; k < Nz; k++)
-                {
-                    const int ijk = IDX(i, j, k);
-                    const int ip = IDX((i + 1) % Nx, j, k);
-                    const int jp = IDX(i, (j + 1) % Ny, k);
-                    vx[ijk] = tmp_fx[ijk] - DT * (a0 * (p[ip] - p[ijk])
-                                                + (inv_rho_x[ijk] - a0) * (cg_r[ip] - cg_r[ijk]));
-                    vy[ijk] = tmp_fy[ijk] - DT * (a0 * (p[jp] - p[ijk])
-                                                + (inv_rho_y[ijk] - a0) * (cg_r[jp] - cg_r[ijk]));
-                    if (!wz_pinned_zface(cfg, k))
-                    {
-                        const int kp = IDX(i, j, k + 1);
-                        vz[ijk] = tmp_fz[ijk] - DT * (a0 * (p[kp] - p[ijk])
-                                                    + (inv_rho_z[ijk] - a0) * (cg_r[kp] - cg_r[ijk]));
-                    }
-                }
-            }
-        }
-    }
-    else
-    {
-        #pragma acc parallel loop collapse(3) present(vx, vy, vz, p, inv_rho_x, inv_rho_y, inv_rho_z, tmp_fx, tmp_fy, tmp_fz)
-        for (int i = 0; i < Nx; i++)
-        {
-            for (int j = 0; j < Ny; j++)
-            {
-                for (int k = 0; k < Nz; k++)
-                {
-                    int ijk = IDX(i, j, k);
-                    int ip = (i + 1) % Nx;
-                    int jp = (j + 1) % Ny;
-                    int kp = (k + 1) % Nz;
+                int ijk = IDX(i, j, k);
+                int ip = (i + 1) % Nx;
+                int jp = (j + 1) % Ny;
+                int kp = (k + 1) % Nz;
 
-                    vx[ijk] = tmp_fx[ijk] - DT * inv_rho_x[ijk] * (p[IDX(ip, j, k)] - p[ijk]);
-                    vy[ijk] = tmp_fy[ijk] - DT * inv_rho_y[ijk] * (p[IDX(i, jp, k)] - p[ijk]);
-                    // 壁面法向面永不修正：vz 在那两处恒 0。k=Nz-1 时 kp 会回绕到 0，
-                    // 那是错的，所以这一层干脆不写（vz[Nz-1] 保持初值 0）。
-                    if (!wz_pinned_zface(cfg, k))
-                    {
-                        vz[ijk] = tmp_fz[ijk] - DT * inv_rho_z[ijk] * (p[IDX(i, j, kp)] - p[ijk]);
-                    }
+                vx[ijk] = tmp_fx[ijk] - DT * inv_rho_x[ijk] * (p[IDX(ip, j, k)] - p[ijk]);
+                vy[ijk] = tmp_fy[ijk] - DT * inv_rho_y[ijk] * (p[IDX(i, jp, k)] - p[ijk]);
+                // 壁面法向面永不修正：vz 在那两处恒 0。k=Nz-1 时 kp 会回绕到 0，
+                // 那是错的，所以这一层干脆不写（vz[Nz-1] 保持初值 0）。
+                if (!wz_pinned_zface(cfg, k))
+                {
+                    vz[ijk] = tmp_fz[ijk] - DT * inv_rho_z[ijk] * (p[IDX(i, j, kp)] - p[ijk]);
                 }
             }
         }

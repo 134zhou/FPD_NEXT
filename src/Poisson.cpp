@@ -164,17 +164,9 @@ void build_tridiag_coeffs(NS_Config cfg, double* tri_w)
 // 文档对照见 doc/PressurePoisson.md §16。
 // ============================================================================
 
-// 面心系数 c = alpha + beta·a。(alpha, beta) = (0, 1) 时 c 与 a 逐位相同（乘 1、加 0 都是精确运算），
-// 所以 PCG 的算子与分裂法右端的 div((1-ρ0 a) grad p̂) 共用这一份离散。
-#pragma acc routine seq
-static inline double lap_coef(double alpha, double beta, double a)
-{
-    return alpha + beta * a;
-}
-
-void apply_laplacian_affine(NS_Config cfg, double alpha, double beta,
-                            const double* inv_rho_x, const double* inv_rho_y, const double* inv_rho_z,
-                            const double* p, double* out)
+void apply_laplacian_var(NS_Config cfg,
+                         const double* inv_rho_x, const double* inv_rho_y, const double* inv_rho_z,
+                         const double* p, double* out)
 {
     const int Nx = cfg.Nx, Ny = cfg.Ny, Nz = cfg.Nz;
 
@@ -191,27 +183,20 @@ void apply_laplacian_affine(NS_Config cfg, double alpha, double beta,
                 const int jp = (j + 1) % Ny;
                 const int jm = (j - 1 + Ny) % Ny;
 
-                double lap = lap_coef(alpha, beta, inv_rho_x[ijk]) * (p[IDX(ip, j, k)] - p[ijk])
-                           - lap_coef(alpha, beta, inv_rho_x[IDX(im, j, k)]) * (p[ijk] - p[IDX(im, j, k)])
-                           + lap_coef(alpha, beta, inv_rho_y[ijk]) * (p[IDX(i, jp, k)] - p[ijk])
-                           - lap_coef(alpha, beta, inv_rho_y[IDX(i, jm, k)]) * (p[ijk] - p[IDX(i, jm, k)]);
+                double lap = inv_rho_x[ijk] * (p[IDX(ip, j, k)] - p[ijk])
+                           - inv_rho_x[IDX(im, j, k)] * (p[ijk] - p[IDX(im, j, k)])
+                           + inv_rho_y[ijk] * (p[IDX(i, jp, k)] - p[ijk])
+                           - inv_rho_y[IDX(i, jm, k)] * (p[ijk] - p[IDX(i, jm, k)]);
 
                 // 壁面通量：Neumann ghost 使壁面那一面的梯度为 0，所以直接不写该项。
                 // 与常系数算子的 d_0 = lam-1（k=0/Nz-1 少一个 -1）是同一件事。
-                if (k < Nz - 1) { lap += lap_coef(alpha, beta, inv_rho_z[ijk]) * (p[IDX(i, j, k + 1)] - p[ijk]); }
-                if (k > 0)      { lap -= lap_coef(alpha, beta, inv_rho_z[IDX(i, j, k - 1)]) * (p[ijk] - p[IDX(i, j, k - 1)]); }
+                if (k < Nz - 1) { lap += inv_rho_z[ijk] * (p[IDX(i, j, k + 1)] - p[ijk]); }
+                if (k > 0)      { lap -= inv_rho_z[IDX(i, j, k - 1)] * (p[ijk] - p[IDX(i, j, k - 1)]); }
 
                 out[ijk] = lap;
             }
         }
     }
-}
-
-void apply_laplacian_var(NS_Config cfg,
-                         const double* inv_rho_x, const double* inv_rho_y, const double* inv_rho_z,
-                         const double* p, double* out)
-{
-    apply_laplacian_affine(cfg, 0.0, 1.0, inv_rho_x, inv_rho_y, inv_rho_z, p, out);
 }
 
 int solve_pressure_var(NS_Config cfg,

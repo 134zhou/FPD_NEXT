@@ -40,7 +40,6 @@ struct FpdConfig
 
     // --- 数值（可选）---
     double pcg_tol = 1e-12;          // 变系数压力 PCG 的相对残差容差（ratio_rho != 1 时用）
-    std::string pressure_solver = "pcg";  // 变密度压力求解：pcg | split（压力分裂法）
 
     // --- 粒子间势（可选；potential=none 时以下全部不用）---
     std::string potential = "none";   // none | wca | morse | lj126

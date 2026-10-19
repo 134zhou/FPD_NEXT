@@ -65,8 +65,6 @@ struct FpdState
     std::vector<double> h_fft, h_randD, h_randN;
     // 变系数压力求解的 PCG 暂存（density_on=1 才分配）。
     std::vector<double> h_cg_r, h_cg_s, h_cg_zq;
-    // 压力分裂法的上一步压力（cfg.split=1 才分配）。
-    std::vector<double> h_p_prev;
     std::vector<double> h_tri_w;                    // z 向三对角前推系数
     std::vector<double> h_diag;                     // 长度 3：|Σb|、PCG 递推残差、真残差
 
@@ -82,7 +80,6 @@ struct FpdState
     double *tmp_fx=0,*tmp_fy=0,*tmp_fz=0;
     double *fft=0,*randD=0,*randN=0;
     double *cg_r=0,*cg_s=0,*cg_zq=0;                // PCG 暂存（density_on=0 时为 null）
-    double *p_prev=0;                               // 分裂法压力历史（split=0 时为 null）
     double *tri_w=0;                                // z 向三对角系数
     double *diag=0;                                 // 长度 3（见 Stokes.h）
 

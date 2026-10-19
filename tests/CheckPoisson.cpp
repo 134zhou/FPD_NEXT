@@ -409,7 +409,7 @@ static void v0_run_step(FpdState& st, double a,
     std::fill(st.h_etaZX.begin(), st.h_etaZX.end(), 0.0);
     st.upload(ST_VELOCITY | ST_PHI);
 
-    step_navier_stokes(st.cfg, st.vx, st.vy, st.vz, st.p, st.p_prev, 0,
+    step_navier_stokes(st.cfg, st.vx, st.vy, st.vz, st.p,
                        st.fx, st.fy, st.fz,
                        st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
                        st.cg_r, st.cg_s, st.cg_zq,
@@ -458,99 +458,6 @@ static void v0_convection_independent_of_a(int Nx, int Ny, int Nz)
     const double rel = vmax > 0.0 ? dmax / vmax : dmax;
     std::printf("      V0 均匀 a=0.5 vs a=1.0：max|Δv*|/max|v*| = %.3e\n", rel);
     check(rel == 0.0, "V0 对流加速度与均匀 a 无关（v* 逐位相同）");
-    st.finish();
-}
-
-// ============================================================================
-// V6：压力分裂法一步（cfg.split=1，split_now=1）。
-//   (a) 高斯 a 场、随机压力历史：投影后 div v 到机器精度（常系数直解，不经迭代）
-//   (b) a ≡ 1 时外推项系数 (1 - ρ0 a) 与 (a - a0) 都为 0，结果必须与 PCG 一致
-// ============================================================================
-static void v6_split_projection(int Nx, int Ny, int Nz)
-{
-    const size_t size = (size_t)Nx * Ny * Nz;
-    NS_Config cfg = make_ns_config(Nx, Ny, Nz, 0.002, 0.0, false);
-    cfg.density_on = 1;
-    cfg.split = 1;
-    cfg.split_rho0 = 1.0;
-    PhiParams pp = make_phi_params(3.2, 1.0, 50.0);
-
-    FpdState st;
-    st.init(cfg, 0, ST_FULL, 20261019ULL);
-
-    std::vector<double> vx(size), vy(size), vz(size), ph(size), pp_prev(size);
-    fill_rand(vx, 4441u); fill_rand(vy, 5551u); fill_rand(vz, 6661u);
-    fill_rand(ph, 7771u); fill_rand(pp_prev, 8881u);
-    for (int j = 0; j < Ny; j++)
-        for (int i = 0; i < Nx; i++) { vz[(size_t)IDX(i, j, Nz - 1)] = 0.0; }
-
-    // 跑一步：a 场由调用方给；split_now 选择路径；返回投影后的速度与 max|div|/max|v|
-    auto one_step = [&](const std::vector<double>& ax, const std::vector<double>& ay,
-                        const std::vector<double>& az, int split_now,
-                        std::vector<double>& ox, std::vector<double>& oy, std::vector<double>& oz)
-    {
-        for (size_t t = 0; t < size; t++)
-        {
-            st.h_vx[t] = vx[t]; st.h_vy[t] = vy[t]; st.h_vz[t] = vz[t];
-            st.h_fx[t] = 0.0; st.h_fy[t] = 0.0; st.h_fz[t] = 0.0;
-            st.h_inv_rho_x[t] = ax[t]; st.h_inv_rho_y[t] = ay[t]; st.h_inv_rho_z[t] = az[t];
-            st.h_p[t] = ph[t]; st.h_p_prev[t] = pp_prev[t];
-        }
-        st.upload(ST_VELOCITY | ST_PHI);
-        #pragma acc update device(st.p_prev[0:size])
-        update_viscosity_fields(cfg, pp, 0, st.Rx, st.Ry, st.Rz,
-                                st.sum_phix, st.sum_phiy, st.sum_phiz,
-                                st.eta, st.etaXY, st.etaYZ, st.etaZX);
-        step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.p_prev, split_now,
-                           st.fx, st.fy, st.fz,
-                           st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
-                           st.cg_r, st.cg_s, st.cg_zq,
-                           st.eta, st.etaXY, st.etaYZ, st.etaZX,
-                           st.pi_dx, st.pi_dy, st.pi_dz,
-                           st.pi_nx, st.pi_ny, st.pi_nz,
-                           st.fft, st.plan_xy, st.tri_w, st.diag,
-                           st.gen, st.randD, st.randN,
-                           st.tmp_fx, st.tmp_fy, st.tmp_fz, 0L);
-        st.download(ST_VELOCITY);
-        ox.assign(st.vx, st.vx + size); oy.assign(st.vy, st.vy + size); oz.assign(st.vz, st.vz + size);
-        double vmax = 0.0, dmax = 0.0;
-        for (int k = 0; k < Nz; k++)
-            for (int j = 0; j < Ny; j++)
-                for (int i = 0; i < Nx; i++)
-                {
-                    const int ijk = IDX(i, j, k);
-                    const double vzb = (k > 0) ? oz[IDX(i, j, k - 1)] : 0.0;
-                    const double div = (ox[ijk] - ox[IDX((i - 1 + Nx) % Nx, j, k)])
-                                     + (oy[ijk] - oy[IDX(i, (j - 1 + Ny) % Ny, k)])
-                                     + (oz[ijk] - vzb);
-                    dmax = std::fmax(dmax, std::fabs(div));
-                    vmax = std::fmax(vmax, std::fmax(std::fabs(ox[ijk]),
-                                        std::fmax(std::fabs(oy[ijk]), std::fabs(oz[ijk]))));
-                }
-        return vmax > 0.0 ? dmax / vmax : dmax;
-    };
-
-    std::vector<double> gx, gy, gz;
-    build_var_a(gx, 0, cfg, 1.0, 4.0, false, 0.0);
-    build_var_a(gy, 1, cfg, 1.0, 4.0, false, 0.0);
-    build_var_a(gz, 2, cfg, 1.0, 4.0, false, 0.0);
-    std::vector<double> sx, sy, sz, qx, qy, qz;
-    const double rdiv = one_step(gx, gy, gz, 1, sx, sy, sz);
-    std::printf("      V6 分裂法一步（高斯 a）：max|div v|/max|v| = %.3e\n", rdiv);
-    check(rdiv < 1e-13, "V6 分裂法一步投影后 div v 到机器精度（< 1e-13）");
-
-    std::vector<double> one(size, 1.0);
-    one_step(one, one, one, 1, sx, sy, sz);
-    one_step(one, one, one, 0, qx, qy, qz);
-    double dmax = 0.0, vmax = 0.0;
-    for (size_t t = 0; t < size; t++)
-    {
-        dmax = std::fmax(dmax, std::fmax(std::fabs(sx[t] - qx[t]),
-                               std::fmax(std::fabs(sy[t] - qy[t]), std::fabs(sz[t] - qz[t]))));
-        vmax = std::fmax(vmax, std::fabs(qx[t]));
-    }
-    std::printf("      V6 a≡1：分裂法 vs PCG max|Δv|/max|v| = %.3e\n", dmax / vmax);
-    check(dmax / vmax < 1e-11, "V6 a≡1 时分裂法与 PCG 一致（外推项系数为 0）");
     st.finish();
 }
 
@@ -672,7 +579,7 @@ static void var_poisson_battery(int Nx, int Ny, int Nz, const char* tag,
                                 st.sum_phix, st.sum_phiy, st.sum_phiz,
                                 st.eta, st.etaXY, st.etaYZ, st.etaZX);
 
-        step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.p_prev, 0,
+        step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p,
                            st.fx, st.fy, st.fz,
                            st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
                            st.cg_r, st.cg_s, st.cg_zq,
@@ -955,7 +862,6 @@ int run_check_poisson(int Nx, int Ny, int Nz)
         var_poisson_battery(16, 16, 16, "高斯 a（amp=1, sigma=4）", 1.0, 4.0, false, 0.0);
         var_poisson_battery(16, 16, 16, "球状 a（amp=1, R=6）",        1.0, 0.0, true, 6.0);
         var_poisson_battery(16, 16, 16, "强对比 a（amp=3, R=5）",      3.0, 0.0, true, 5.0);
-        v6_split_projection(16, 16, 16);
     }
     else
     {

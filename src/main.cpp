@@ -9,18 +9,12 @@
 #include <openacc.h>
 
 #include "Common.h"
-#include "Stencil.h"
-#include "Check.h"
-#include "Force.h"
-#include "Viscosity.h"
-#include "Stokes.h"
 #include "Config.h"
 #include "IOBin.h"
 #include "State.h"
 #include "Potential.h"
-#include "Velocity.h"
-#include "Mass.h"
 #include "Poisson.h"
+#include "Step.h"
 
 // ============================================================================
 // 生产路径：配置参数 + .fpd 初态/断点重启
@@ -41,8 +35,9 @@ static int run_production(const FpdConfig& c)
 
     FpdConfig effective = c;
     effective.Nx = h.Nx; effective.Ny = h.Ny; effective.Nz = h.Nz;
-    NS_Config cfg = make_ns_config(effective);
-    PhiParams pp  = make_phi_params(effective);
+    const StepParams sp = make_step_params(effective);
+    const NS_Config cfg = sp.cfg;
+    const PhiParams pp  = sp.pp;
     const int size = cfg.Nx * cfg.Ny * cfg.Nz;
     const int N = h.N;
     const long start_step = (long)h.step;
@@ -56,12 +51,10 @@ static int run_production(const FpdConfig& c)
     FpdState st;
     st.init(cfg, N, ST_FULL, c.seed);
     CkptArrays arr = st.ckpt_arrays();
-    // 压力历史只有分裂法用得上；其余情况读过去但丢弃（仍参与校验和）。
-    if (cfg.split) { arr.p = st.p; arr.p_prev = st.p_prev; }
     if (!read_checkpoint(reader, h, arr, err))
     { std::cerr << "错误: " << err << "\n"; st.finish(); return 2; }
     std::cout << "从 " << c.init_file << " 载入（step=" << h.step
-              << "，N=" << N << (h.has_pressure() ? "，含压力历史" : "") << "）\n";
+              << "，N=" << N << "）\n";
 
     // 壁面不变量【直接】检查：上壁那一层 vz 必须逐位为 0。
     //
@@ -92,29 +85,12 @@ static int run_production(const FpdConfig& c)
 
     // st.init 在载入前映射了初始 0；现在把文件数组上传到设备
     st.upload(ST_PARTICLE | ST_VELOCITY);
-    // 压力分裂法的有效压力层数（p、p_prev）。文件带压力历史时直接续上（逐位重启），
-    // 否则前 2 步用 PCG 重新建立。
-    int p_hist = 0;
-    if (cfg.split && h.has_pressure())
-    {
-        acc_update_device(st.p_prev, (size_t)size * sizeof(double));   // st.upload 已传 p
-        p_hist = 2;
-    }
 
-    // 粒子间势、壁面势与重力加速度
-    const PotentialParams pot  = make_potential_params(c);
-    const WallParams     wall = make_wall_params(c);
-    const ExternalField  ext  = make_external_field(c);
-    const double d_rho = c.ratio_rho - 1.0;
-
-    // 重力是体力 rho*g；均匀项 rho_l*g 被静压解析减掉，净体密度 = (rho-rho_l)*g。
-    // 它【不再】进 compute_particle_forces（见 Mass.h 与 Potential.cpp）。
-
-    // 背景力密度补偿恒为 0：无滑移壁面本身就是真实的动量汇，均匀外场的反冲由
-    // 壁面吸收，不需要 bg = −ΣF/size 去抵消「整盒漂移」。
-    // ⚠️ 管道保留（update_force_field 的 bg 形参不动，见 Force.cpp 的力路径约束），
-    //    只是传 0。删形参会动到力路径，代价远大于收益。
-    const double bgx = 0.0, bgy = 0.0, bgz = 0.0;
+    // 粒子间势、壁面势与重力加速度。重力是体力 rho*g，净体密度 (rho-rho_l)*g，
+    // 由 step_fields 里的 apply_gravity 进入面心力场，不进粒子力（见 Step.h、Mass.h）。
+    const PotentialParams& pot  = sp.pot;
+    const WallParams&      wall = sp.wall;
+    const ExternalField&   ext  = sp.ext;
 
     if (c.potential != "none")
     {
@@ -133,17 +109,11 @@ static int run_production(const FpdConfig& c)
                   << ")   rho_p/rho_l = " << c.ratio_rho
                   << "   净体密度 = (rho-rho_l)*g" << std::endl;
     }
-    if (cfg.density_on && !cfg.split)
+    if (cfg.density_on)
     {
         std::cout << "密度对比: rho_p/rho_l = " << c.ratio_rho
                   << "   压力方程 div((1/rho)grad p)=b，FFT 预条件 PCG（容差 " << cfg.pcg_tol
                   << "，上限 " << PCG_MAX_ITER << " 次）" << std::endl;
-    }
-    if (cfg.split)
-    {
-        std::cout << "密度对比: rho_p/rho_l = " << c.ratio_rho
-                  << "   压力分裂法（rho0 = " << cfg.split_rho0
-                  << "，常系数 FFT 直解 + 外推压力；前 2 步 PCG 建立历史）" << std::endl;
     }
 
     std::cout << "开始模拟：" << cfg.Nx << "x" << cfg.Ny << "x" << cfg.Nz
@@ -157,29 +127,17 @@ static int run_production(const FpdConfig& c)
     int rc = 0;
 
     // 只做文件 IO。arr 每次 write 现场从 st 取，不持有陈旧指针。
-    // 分裂法且压力历史完整时额外写入 p、p_prev（v4 flags bit0），保证逐位重启；
-    // 其余情况与 v3 载荷相同。p 不走 FpdState::download，这里显式拉回。
     struct CkptWriter
     {
         const FpdConfig& c;
         const CkptHeader& h;
         FpdState& st;
-        const int& p_hist;
 
         bool write(long step) const
         {
             CkptHeader oh = h;
             oh.step = step;
-            oh.flags = 0;
             CkptArrays oa = st.ckpt_arrays();
-            if (st.cfg.split && p_hist >= 2)
-            {
-                const size_t nb = st.size * sizeof(double);
-                acc_update_self(st.p, nb);
-                acc_update_self(st.p_prev, nb);
-                oh.flags = FPD_FLAG_PRESSURE;
-                oa.p = st.p; oa.p_prev = st.p_prev;
-            }
 
             const std::string path = ckpt_path(c.out_dir, c.run_name, step);
             std::string e2;
@@ -188,7 +146,7 @@ static int run_production(const FpdConfig& c)
             return true;
         }
     };
-    const CkptWriter writer{c, h, st, p_hist};
+    const CkptWriter writer{c, h, st};
 
     // 粒子越界检查。只在已经 download 过 ST_PARTICLE 的地方调用 ——
     // 不做每步的 device→host 同步（那会把 GPU 流水线打断）。
@@ -227,9 +185,7 @@ static int run_production(const FpdConfig& c)
     for (long step = start_step; step < c.n_steps; step++)
     {
         // 力：用当前 device 上的 R 算 F（GPU 全程 device，无 host 往返）。
-        // 只装粒子对势 + 壁面力；重力是体力，由 apply_gravity 进入面心力场。
-        compute_particle_forces(cfg, pot, wall, N, st.Rx, st.Ry, st.Rz,
-                                st.Fx, st.Fy, st.Fz);
+        step_forces(sp, st);
 
         if (step % c.interval_ckpt == 0)
         {
@@ -249,7 +205,6 @@ static int run_production(const FpdConfig& c)
             { if (!std::isfinite(st.vx[i])) { bad = true; break; } }
             if (!std::isfinite(st.Rx[0])) { bad = true; }
             if (check_wall_bounds(step)) { bad = true; }
-
 
             const double el = std::chrono::duration<double>(
                                   std::chrono::steady_clock::now() - t_start).count();
@@ -279,51 +234,19 @@ static int run_production(const FpdConfig& c)
             }
         }
 
-        update_viscosity_fields(cfg, pp, N, st.Rx, st.Ry, st.Rz,
-                                st.sum_phix, st.sum_phiy, st.sum_phiz,
-                                st.eta, st.etaXY, st.etaYZ, st.etaZX);
-        // 反密度场只依赖 R；density_on=0 时跳过（数组保持 1.0）。
-        if (cfg.density_on)
-        {
-            update_mass_fields(cfg, pp, d_rho, N, st.Rx, st.Ry, st.Rz,
-                               st.inv_rho_x, st.inv_rho_y, st.inv_rho_z);
-        }
-        update_force_field(cfg, pp, N, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz,
-                           st.sum_phix, st.sum_phiy, st.sum_phiz, bgx, bgy, bgz,
-                           st.fx, st.fy, st.fz);
-        // 重力体力必须加在 update_force_field 之后、step_navier_stokes 之前。
-        if (cfg.density_on && (ext.gx != 0.0 || ext.gy != 0.0 || ext.gz != 0.0))
-        {
-            apply_gravity(cfg, ext, st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
-                          st.fx, st.fy, st.fz);
-        }
-        const int split_now = (cfg.split && p_hist >= 2) ? 1 : 0;
-        const int cg_iter = step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p,
-                                               st.p_prev, split_now,
-                                               st.fx, st.fy, st.fz,
-                                               st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
-                                               st.cg_r, st.cg_s, st.cg_zq,
-                                               st.eta, st.etaXY, st.etaYZ, st.etaZX,
-                                               st.pi_dx, st.pi_dy, st.pi_dz, st.pi_nx, st.pi_ny, st.pi_nz,
-                                               st.fft, st.plan_xy, st.tri_w, st.diag,
-                                               st.gen, st.randD, st.randN,
-                                               st.tmp_fx, st.tmp_fy, st.tmp_fz, step);
+        step_fields(sp, st);
+        const int cg_iter = step_fluid(cfg, st, step);
         // PCG 未收敛会让 div v 悄悄不为 0：这是算法级失败。每步都查 ——
         // solve_pressure_var 在主机侧写好了 diag[1]（见 Poisson.h），不需要额外同步。
         // 收敛 ⟺ diag[1] <= pcg_tol；NaN 也会落进「未收敛」。
         bool pcg_failed = false;
-        if (cfg.split && p_hist < 2) { p_hist++; }
-        if (cfg.density_on && !split_now)
+        if (cfg.density_on)
         {
             cg_sum += cg_iter; cg_cnt++;
             if (cg_iter > cg_max) { cg_max = cg_iter; }
             pcg_failed = !(st.diag[1] <= cfg.pcg_tol);
         }
-        update_particle_velocity(cfg, pp, N, st.Rx, st.Ry, st.Rz,
-                                 st.sum_phix, st.sum_phiy, st.sum_phiz,
-                                 st.vx, st.vy, st.vz, st.Vx, st.Vy, st.Vz);
-        update_particle_position(cfg, N, st.Rx, st.Ry, st.Rz,
-                                 st.Rux, st.Ruy, st.Ruz, st.Vx, st.Vy, st.Vz);
+        step_particles(sp, st);
 
         // 未收敛时把这一步走完再落盘，文件里的 v 与 R 属于同一时刻 step+1。
         if (pcg_failed)
@@ -331,8 +254,7 @@ static int run_production(const FpdConfig& c)
             std::cerr << "错误: step " << step << " PCG 未收敛：迭代 " << cg_iter
                       << " 次，相对残差 " << std::scientific << st.diag[1]
                       << "（容差 " << cfg.pcg_tol << "）。落盘后中止\n" << std::fixed;
-            compute_particle_forces(cfg, pot, wall, N, st.Rx, st.Ry, st.Rz,
-                                    st.Fx, st.Fy, st.Fz);
+            step_forces(sp, st);
             st.download(ST_VELOCITY | ST_PARTICLE);
             writer.write(step + 1);
             rc = 3;
@@ -345,8 +267,7 @@ static int run_production(const FpdConfig& c)
     {
         // 循环里最后一次 update_particle_position 更新了 R，而 F 只在循环开头算。
         // 补算一次，保证「文件里的 F 对应文件里的 R」。
-        compute_particle_forces(cfg, pot, wall, N, st.Rx, st.Ry, st.Rz,
-                                st.Fx, st.Fy, st.Fz);
+        step_forces(sp, st);
         st.download(ST_VELOCITY | ST_PARTICLE);
         if (!writer.write(c.n_steps)) { rc = 2; }
     }

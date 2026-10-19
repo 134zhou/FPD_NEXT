@@ -38,9 +38,5 @@
   V5 强对比 a（amp=3, R=5）：PCG 收敛（迭代 < 200，相对残差 < 1e-11） PASS
       强对比 a（amp=3, R=5） 一步投影：max|div v|/max|v| = 8.079e-12
   V4 强对比 a（amp=3, R=5）：一步投影后 div v = 0 PASS
-      V6 分裂法一步（高斯 a）：max|div v|/max|v| = 1.304e-15
-  V6 分裂法一步投影后 div v 到机器精度（< 1e-13） PASS
-      V6 a≡1：分裂法 vs PCG max|Δv|/max|v| = 3.452e-16
-  V6 a≡1 时分裂法与 PCG 一致（外推项系数为 0） PASS
 
 全部通过

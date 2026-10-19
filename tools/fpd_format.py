@@ -18,20 +18,15 @@ import struct
 
 MAGIC       = b"FPDCKPT\0"
 # v3 只存尺寸、粒子数和步数；物理参数从配置读取。
-# v4 在 version 之后加 flags；bit0 = 粒子数组之后追加压力历史 p、p_prev（压力分裂法）。
-# 写端只写 v4（不带压力）；读端接受 3 与 4。
-VERSION     = 4
-VERSION_MIN = 3
-FLAG_PRESSURE = 1
+VERSION     = 3
 ENDIAN_TAG  = 0x01020304
 FNV_OFFSET = 14695981039346656037
 FNV_PRIME  = 1099511628211
 MASK64     = (1 << 64) - 1
 
-# version（与 v4 的 flags）之后的 header 字段：(名字, struct 格式)。
-# 顺序必须与 IOBin.cpp 的 FPD_HEADER_FIELDS 完全一致。
+# header 字段：(名字, struct 格式)。顺序必须与 IOBin.h 的 FPD_HEADER_FIELDS 完全一致。
 HEADER_FIELDS = [
-    ("Nx", "<i"), ("Ny", "<i"),
+    ("version", "<I"), ("Nx", "<i"), ("Ny", "<i"),
     ("Nz", "<i"), ("N", "<i"), ("step", "<q"),
 ]
 # 粒子数组的顺序，同样必须与 C++ 侧一致
@@ -60,7 +55,7 @@ def _fnv_bytes(h, buf):
 
 
 def default_header(Nx, Ny, Nz, N, step=0):
-    return {"version": VERSION, "flags": 0, "Nx": Nx, "Ny": Ny, "Nz": Nz,
+    return {"version": VERSION, "Nx": Nx, "Ny": Ny, "Nz": Nz,
             "N": N, "step": step}
 
 
@@ -83,12 +78,8 @@ def write_fpd(path, header, fields, particles, chunk_doubles=1 << 20):
             f.write(buf)
             h = _fnv_bytes(h, buf)
 
-        if header.get("flags", 0) != 0:
-            raise ValueError("Python 侧只写不含压力历史的文件（flags=0）")
         emit(MAGIC)
         emit(struct.pack("<I", ENDIAN_TAG))
-        emit(struct.pack("<I", VERSION))
-        emit(struct.pack("<I", 0))
         for name, fmt in HEADER_FIELDS:
             emit(struct.pack(fmt, header[name]))
 
@@ -136,18 +127,12 @@ def read_header(path):
         if tag != ENDIAN_TAG:
             raise ValueError("%s 字节序标记不匹配: 0x%08x" % (path, tag))
         header = {}
-        (header["version"],) = struct.unpack("<I", f.read(4))
-        if not VERSION_MIN <= header["version"] <= VERSION:
-            raise ValueError("%s 版本 %d，本工具只认 %d–%d"
-                             % (path, header["version"], VERSION_MIN, VERSION))
-        header["flags"] = 0
-        if header["version"] >= 4:
-            (header["flags"],) = struct.unpack("<I", f.read(4))
-            if header["flags"] & ~FLAG_PRESSURE:
-                raise ValueError("%s 有未知的 flags 位 0x%x" % (path, header["flags"]))
         for name, fmt in HEADER_FIELDS:
             n = struct.calcsize(fmt)
             (header[name],) = struct.unpack(fmt, f.read(n))
+        if header["version"] != VERSION:
+            raise ValueError("%s 版本 %d，本工具只认 %d"
+                             % (path, header["version"], VERSION))
         header["_data_offset"] = f.tell()
     return header
 
@@ -168,10 +153,6 @@ def field_offsets(header):
     for name in PARTICLE_ARRAYS:
         out[name] = (off, N)
         off += 8 * N
-    if header.get("flags", 0) & FLAG_PRESSURE:
-        for name in ("p", "p_prev"):
-            out[name] = (off, size)
-            off += 8 * size
     out["_checksum"] = (off, 1)
     return out
 

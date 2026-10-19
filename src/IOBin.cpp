@@ -63,8 +63,9 @@ struct Reader
     void arr(double* a, size_t n) { get(a, n * sizeof(double)); }
 };
 
-// header 在 version（与 v4 的 flags）之后的字段顺序，写和读用同一个宏展开
+// header 的字段顺序在写和读之间必须严格一致，所以用同一个宏展开两次
 #define FPD_HEADER_FIELDS(OP, h)  \
+    OP(h.version);                                                \
     OP(h.Nx); OP(h.Ny); OP(h.Nz); OP(h.N);                          \
     OP(h.step);
 
@@ -97,9 +98,6 @@ bool save_checkpoint(const char* path, const CkptHeader& h_in,
                      const CkptArrays& a, std::string& err)
 {
     CkptHeader h = h_in;
-    h.version = FPD_VERSION;
-    if (h.has_pressure() && (!a.p || !a.p_prev))
-    { err = "内部错误：flags 声明含压力但未给数组"; return false; }
 
     FILE* f = fopen(path, "wb");
     if (!f) { err = std::string("无法写入 ") + path; return false; }
@@ -111,8 +109,6 @@ bool save_checkpoint(const char* path, const CkptHeader& h_in,
     uint32_t endian = FPD_ENDIAN_TAG;
     w.val(endian);
 
-    w.val(h.version);
-    w.val(h.flags);
     #define WOP(x) w.val(x)
     FPD_HEADER_FIELDS(WOP, h)
     #undef WOP
@@ -126,7 +122,6 @@ bool save_checkpoint(const char* path, const CkptHeader& h_in,
     w.arr(a.Rux, N); w.arr(a.Ruy, N); w.arr(a.Ruz, N);
     w.arr(a.Vx, N);  w.arr(a.Vy, N);  w.arr(a.Vz, N);
     w.arr(a.Fx, N);  w.arr(a.Fy, N);  w.arr(a.Fz, N);
-    if (h.has_pressure()) { w.arr(a.p, size); w.arr(a.p_prev, size); }
 
     // 校验和本身不参与哈希
     const uint64_t sum = w.hash.h;
@@ -169,28 +164,16 @@ static FILE* open_and_read_header(const char* path, CkptHeader& h,
         fclose(f); return 0;
     }
 
-    r.val(h.version);
-    if (!r.ok) { err = std::string(path) + " 头部被截断"; fclose(f); return 0; }
-    if (h.version < FPD_VERSION_MIN || h.version > FPD_VERSION)
-    {
-        std::ostringstream o;
-        o << path << " 的版本是 " << h.version << "，本程序只认 " << FPD_VERSION_MIN
-          << "–" << FPD_VERSION;
-        err = o.str();
-        fclose(f); return 0;
-    }
-    h.flags = 0;
-    if (h.version >= 4u) { r.val(h.flags); }
-
     #define ROP(x) r.val(x)
     FPD_HEADER_FIELDS(ROP, h)
     #undef ROP
 
     if (!r.ok) { err = std::string(path) + " 头部被截断"; fclose(f); return 0; }
-    if ((h.flags & ~FPD_FLAG_PRESSURE) != 0)
+
+    if (h.version != FPD_VERSION)
     {
         std::ostringstream o;
-        o << path << " 有未知的 flags 位 0x" << std::hex << h.flags;
+        o << path << " 的版本是 " << h.version << "，本程序只认 " << FPD_VERSION;
         err = o.str();
         fclose(f); return 0;
     }
@@ -238,14 +221,6 @@ bool read_checkpoint(CkptReader& ctx, const CkptHeader& h,
     r.arr(a.Rux, N); r.arr(a.Ruy, N); r.arr(a.Ruz, N);
     r.arr(a.Vx, N);  r.arr(a.Vy, N);  r.arr(a.Vz, N);
     r.arr(a.Fx, N);  r.arr(a.Fy, N);  r.arr(a.Fz, N);
-    if (h.has_pressure())
-    {
-        // 调用方不要压力时也必须读过去（参与校验和）
-        std::vector<double> sink;
-        if (!a.p || !a.p_prev) { sink.assign(size, 0.0); }
-        r.arr(a.p ? a.p : sink.data(), size);
-        r.arr(a.p_prev ? a.p_prev : sink.data(), size);
-    }
 
     if (!r.ok)
     {

@@ -35,9 +35,6 @@
 //    density_on=1 时压力方程解 div(a grad p)=b；判据是 --check-poisson 的 V0。
 // 三个 cg_* 是 density_on=1 才分配的 PCG 暂存（=0 时可为 null，不被读取）。
 //
-// 压力分裂（cfg.split=1，见 Stokes.cpp §4）：split_now=1 时用常系数 FFT 直解 + 外推压力，
-// 返回 0 次迭代；split_now=0 时走 PCG 并把 pⁿ 移进 p_prev（建立历史）。调用方负责数历史层数。
-//
 // 真残差（density_on=1）：投影后 div v^{n+1} = dt·(b - L p) 精确成立，所以
 //   diag[2] = ||div v^{n+1}||₂ / ||div v*||₂ = ||b - L p|| / ||b||
 // 是不经 PCG 递推、直接从速度场量出的残差（递推残差 diag[1] 在 1e-15 附近会与它分叉）。
@@ -46,8 +43,6 @@ int step_navier_stokes(
     NS_Config cfg,
     double* vx, double* vy, double* vz,
     double* p,
-    double* p_prev,                        // 分裂法的上一步压力（cfg.split=0 时可为 null）
-    int split_now,                         // 1：本步用压力分裂（需 p、p_prev 都是有效历史）
     double* fx, double* fy, double* fz,
     const double* inv_rho_x, const double* inv_rho_y, const double* inv_rho_z,
     double* cg_r, double* cg_s, double* cg_zq,

@@ -7,8 +7,7 @@
   配置和 --set 缺少等号报错  PASS
   非法势名称报错  PASS
   非法移位名称报错  PASS
-  非法压力求解器名称报错  PASS
-  pressure_solver/pcg_tol 进入 NS_Config  PASS
+  pcg_tol 进入 NS_Config（默认 1e-12）  PASS
   未使用的已知势参数允许存在  PASS
   数值范围由使用者负责  PASS
   Nx=32 在配置文件中被拒绝  PASS

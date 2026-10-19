@@ -50,12 +50,6 @@ void apply_laplacian_var(NS_Config cfg,
                          const double* inv_rho_x, const double* inv_rho_y, const double* inv_rho_z,
                          const double* p, double* out);
 
-// 同一离散，面心系数换成 alpha + beta·a：out = div((alpha + beta a) grad p)。
-// apply_laplacian_var = (0, 1)；压力分裂法的右端用 (1, -ρ0)。
-void apply_laplacian_affine(NS_Config cfg, double alpha, double beta,
-                            const double* inv_rho_x, const double* inv_rho_y, const double* inv_rho_z,
-                            const double* p, double* out);
-
 // PCG 解 L p = b（等价地 A p = -b，A = -L），预条件器 B = -a_bar * M
 // （M 是上面的常系数 Laplacian，直接复用 solve_pressure，不复制 FFT/Thomas；
 //  a_bar 是实际参与算子的面心 a 的均值。标量缩放不改变 PCG 的迭代序列）。

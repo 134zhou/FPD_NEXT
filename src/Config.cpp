@@ -27,7 +27,6 @@ std::vector<FieldDesc> config_fields(FpdConfig& c)
         {"gravity_y",      F_DOUBLE, &c.gravity_y,      false, "y 向重力加速度（体力=rho*g，净体密度=(rho-rho_l)*g）"},
         {"noise_on",       F_INT,    &c.noise_on,       false, "0/1，关掉则 W=0"},
         {"pcg_tol",        F_DOUBLE, &c.pcg_tol,        false, "变系数压力 PCG 的相对残差容差（ratio_rho != 1 时用）"},
-        {"pressure_solver", F_STRING, &c.pressure_solver, false, "变密度压力求解: pcg | split（ratio_rho != 1 时用）"},
 
         {"potential",      F_STRING, &c.potential,      false, "粒子间势: none|wca|morse|lj126"},
         {"pot_eps",        F_DOUBLE, &c.pot_eps,        false, "WCA/LJ 的 ε"},
@@ -208,11 +207,6 @@ bool validate_config(const FpdConfig& c, std::string& err)
         if (was_given(c.keys_given, key))
         { err = std::string("网格尺寸由 init_file 提供，不允许设置 ") + key; return false; }
     }
-    if (c.pressure_solver != "pcg" && c.pressure_solver != "split")
-    {
-        err = "pressure_solver 的合法取值是 pcg | split，收到 '" + c.pressure_solver + "'";
-        return false;
-    }
     FpdConfig tmp = c;
     for (const FieldDesc& f : config_fields(tmp))
     {
@@ -336,14 +330,9 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
     ofs << "# derived d_rho      = " << (c.ratio_rho - 1.0) << "   (= rho_p/rho_l - 1)\n";
     ofs << "# derived density_on = " << ns.density_on
         << "   (1: 压力方程 div((1/rho)grad p)=b，PCG；0: 常系数直解)\n";
-    if (ns.density_on && !ns.split)
+    if (ns.density_on)
     {
         ofs << "# derived PCG tol    = " << ns.pcg_tol << " (相对残差)   上限 200 次\n";
-    }
-    if (ns.split)
-    {
-        ofs << "# derived 压力分裂   rho0 = " << ns.split_rho0
-            << "   (前 2 步 PCG 建立压力历史)\n";
     }
     if (ext.gx != 0.0 || ext.gy != 0.0 || ext.gz != 0.0)
     {
@@ -370,8 +359,6 @@ NS_Config make_ns_config(const FpdConfig& c)
     NS_Config cfg = make_ns_config(c.Nx, c.Ny, c.Nz, c.dt, c.kT, c.noise_on != 0);
     cfg.density_on = (c.ratio_rho != 1.0) ? 1 : 0;
     cfg.pcg_tol    = c.pcg_tol;
-    cfg.split      = (cfg.density_on && c.pressure_solver == "split") ? 1 : 0;
-    cfg.split_rho0 = (c.ratio_rho < 1.0) ? c.ratio_rho : 1.0;
     return cfg;
 }
 

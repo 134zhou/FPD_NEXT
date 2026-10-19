@@ -65,11 +65,9 @@ int run_config_check()
           "配置和 --set 缺少等号报错");
     check(load(base + "potential=unknown\n", c) && !validate_config(c, err), "非法势名称报错");
     check(load(base + "wall_shift=unknown\n", c) && !validate_config(c, err), "非法移位名称报错");
-    check(load(base + "pressure_solver=unknown\n", c) && !validate_config(c, err) &&
-          err.find("pressure_solver") != std::string::npos, "非法压力求解器名称报错");
-    check(load(base + "pressure_solver=split\npcg_tol=1e-6\n", c) && validate_config(c, err) &&
-          make_ns_config(c).split == 1 && make_ns_config(c).pcg_tol == 1e-6,
-          "pressure_solver/pcg_tol 进入 NS_Config");
+    check(load(base + "pcg_tol=1e-6\n", c) && validate_config(c, err) &&
+          make_ns_config(c).pcg_tol == 1e-6 && make_ns_config(FpdConfig()).pcg_tol == 1e-12,
+          "pcg_tol 进入 NS_Config（默认 1e-12）");
     check(load(base + "pot_eps=10\nwall_alpha=1\n", c) && validate_config(c, err),
           "未使用的已知势参数允许存在");
     // 只测试配置层接受，不把不适合模拟的参数送入求解器。

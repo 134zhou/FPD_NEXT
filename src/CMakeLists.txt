@@ -11,6 +11,7 @@ add_library(fpd_core STATIC
     State.cpp
     Potential.cpp
     Poisson.cpp
+    Step.cpp
 )
 target_include_directories(fpd_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(fpd_core PUBLIC CUDA::cudart CUDA::curand CUDA::cufft)
