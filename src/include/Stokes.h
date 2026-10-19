@@ -34,6 +34,11 @@
 //    显式步拆成 d_adv（不乘 a）与 d_visc = d_pix - d_adv（乘 a），修正步乘 a。
 //    density_on=1 时压力方程解 div(a grad p)=b；判据是 --check-poisson 的 V0。
 // 三个 cg_* 是 density_on=1 才分配的 PCG 暂存（=0 时可为 null，不被读取）。
+//
+// 真残差（density_on=1）：投影后 div v^{n+1} = dt·(b - L p) 精确成立，所以
+//   diag[2] = ||div v^{n+1}||₂ / ||div v*||₂ = ||b - L p|| / ||b||
+// 是不经 PCG 递推、直接从速度场量出的残差（递推残差 diag[1] 在 1e-15 附近会与它分叉）。
+// 主机侧与设备侧都写。density_on=0 时不计算（常系数直解到机器精度）。
 int step_navier_stokes(
     NS_Config cfg,
     double* vx, double* vy, double* vz,
@@ -48,7 +53,7 @@ int step_navier_stokes(
     double* fft_data,
     cufftHandle plan_xy,                   // xy 批量 2D FFT 计划（batch = Nz）
     const double* tri_w,                   // z 向三对角前推系数
-    double* diag,                          // [0]=|Σb̂|，[1]=PCG 最终相对残差（长度 2）
+    double* diag,                          // [0]=|Σb̂|，[1]=PCG 递推残差，[2]=真残差（长度 3，见上）
     curandGenerator_t gen,
     double* randD, double* randN,
     double* tmp_fx, double* tmp_fy, double* tmp_fz,

@@ -26,6 +26,7 @@ std::vector<FieldDesc> config_fields(FpdConfig& c)
         {"gravity_x",      F_DOUBLE, &c.gravity_x,      false, "x 向重力加速度（体力=rho*g，净体密度=(rho-rho_l)*g）"},
         {"gravity_y",      F_DOUBLE, &c.gravity_y,      false, "y 向重力加速度（体力=rho*g，净体密度=(rho-rho_l)*g）"},
         {"noise_on",       F_INT,    &c.noise_on,       false, "0/1，关掉则 W=0"},
+        {"pcg_tol",        F_DOUBLE, &c.pcg_tol,        false, "变系数压力 PCG 的相对残差容差（ratio_rho != 1 时用）"},
 
         {"potential",      F_STRING, &c.potential,      false, "粒子间势: none|wca|morse|lj126"},
         {"pot_eps",        F_DOUBLE, &c.pot_eps,        false, "WCA/LJ 的 ε"},
@@ -331,7 +332,7 @@ bool dump_config(const FpdConfig& c, const char* path, std::string& err)
         << "   (1: 压力方程 div((1/rho)grad p)=b，PCG；0: 常系数直解)\n";
     if (ns.density_on)
     {
-        ofs << "# derived PCG tol    = 1e-12 (相对残差)   上限 200 次\n";
+        ofs << "# derived PCG tol    = " << ns.pcg_tol << " (相对残差)   上限 200 次\n";
     }
     if (ext.gx != 0.0 || ext.gy != 0.0 || ext.gz != 0.0)
     {
@@ -357,6 +358,7 @@ NS_Config make_ns_config(const FpdConfig& c)
 {
     NS_Config cfg = make_ns_config(c.Nx, c.Ny, c.Nz, c.dt, c.kT, c.noise_on != 0);
     cfg.density_on = (c.ratio_rho != 1.0) ? 1 : 0;
+    cfg.pcg_tol    = c.pcg_tol;
     return cfg;
 }
 

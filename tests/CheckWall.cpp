@@ -640,9 +640,8 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
     std::printf("      %-10s dt=%-7g n=%d  b=%-4d  <Σ|v|²>/(kT·dim) = %.4f ± %.4f  (%.1fσ)\n",
                 lbl, dt, n, pk.block_len, ratio, sigma, dev);
     last_ratio = ratio; last_sigma = sigma;
-    // ⚠️ 这里【不做】绝对判据。绝对量测（比值是否精确为 1）被这台小盒子量测机器
-    //    的 ~1.7% 系统偏差污染（周期控制也落在 0.98），判据由调用方以【差分】形式
-    //    给出。这个函数只负责产生数值。
+    // ⚠️ 这里【不做】绝对判据。绝对比值受 4³ 小盒子的 dim 约定与显式 Euler 偏差影响，
+    //    判据由调用方以【差分】形式给出。这个函数只负责产生数值。
     (void)verbose;
 }
 

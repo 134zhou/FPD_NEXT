@@ -20,6 +20,7 @@
 #include "Potential.h"
 #include "Velocity.h"
 #include "Mass.h"
+#include "Poisson.h"
 
 // ============================================================================
 // 生产路径：配置参数 + .fpd 初态/断点重启
@@ -125,8 +126,8 @@ static int run_production(const FpdConfig& c)
     if (cfg.density_on)
     {
         std::cout << "密度对比: rho_p/rho_l = " << c.ratio_rho
-                  << "   压力方程 div((1/rho)grad p)=b，FFT 预条件 PCG（容差 1e-12）"
-                  << std::endl;
+                  << "   压力方程 div((1/rho)grad p)=b，FFT 预条件 PCG（容差 " << cfg.pcg_tol
+                  << "，上限 " << PCG_MAX_ITER << " 次）" << std::endl;
     }
 
     std::cout << "开始模拟：" << cfg.Nx << "x" << cfg.Ny << "x" << cfg.Nz
@@ -221,9 +222,6 @@ static int run_production(const FpdConfig& c)
             if (!std::isfinite(st.Rx[0])) { bad = true; }
             if (check_wall_bounds(step)) { bad = true; }
 
-            // PCG 没收敛会让 div v 悄悄不为 0：这是算法级失败，落盘后中止。
-            if (cfg.density_on && std::isfinite(st.diag[1]) && st.diag[1] > 1e-6)
-            { bad = true; }
 
             const double el = std::chrono::duration<double>(
                                   std::chrono::steady_clock::now() - t_start).count();
@@ -237,10 +235,9 @@ static int run_production(const FpdConfig& c)
                 std::cout << "   cg=" << (cg_cnt > 0 ? (double)cg_sum / (double)cg_cnt : 0.0)
                           << "/" << cg_max << "   |Σb|=" << std::scientific
                           << std::setprecision(1) << st.diag[0] << "   残差=" << st.diag[1]
-                          << std::fixed;
-                if (std::isfinite(st.diag[1]) && st.diag[1] > 1e-6) { std::cout << " *** PCG 未收敛 ***"; }
+                          << "   真残差=" << st.diag[2] << std::fixed;
             }
-            std::cout << (bad ? "   *** 检测到 NaN/Inf 或未收敛，中止 ***" : "")
+            std::cout << (bad ? "   *** 检测到 NaN/Inf 或穿墙，中止 ***" : "")
                       << std::endl;
 
             cg_sum = 0; cg_max = 0; cg_cnt = 0;
@@ -281,16 +278,35 @@ static int run_production(const FpdConfig& c)
                                                st.fft, st.plan_xy, st.tri_w, st.diag,
                                                st.gen, st.randD, st.randN,
                                                st.tmp_fx, st.tmp_fy, st.tmp_fz, step);
+        // PCG 未收敛会让 div v 悄悄不为 0：这是算法级失败。每步都查 ——
+        // solve_pressure_var 在主机侧写好了 diag[1]（见 Poisson.h），不需要额外同步。
+        // 收敛 ⟺ diag[1] <= pcg_tol；NaN 也会落进「未收敛」。
+        bool pcg_failed = false;
         if (cfg.density_on)
         {
             cg_sum += cg_iter; cg_cnt++;
             if (cg_iter > cg_max) { cg_max = cg_iter; }
+            pcg_failed = !(st.diag[1] <= cfg.pcg_tol);
         }
         update_particle_velocity(cfg, pp, N, st.Rx, st.Ry, st.Rz,
                                  st.sum_phix, st.sum_phiy, st.sum_phiz,
                                  st.vx, st.vy, st.vz, st.Vx, st.Vy, st.Vz);
         update_particle_position(cfg, N, st.Rx, st.Ry, st.Rz,
                                  st.Rux, st.Ruy, st.Ruz, st.Vx, st.Vy, st.Vz);
+
+        // 未收敛时把这一步走完再落盘，文件里的 v 与 R 属于同一时刻 step+1。
+        if (pcg_failed)
+        {
+            std::cerr << "错误: step " << step << " PCG 未收敛：迭代 " << cg_iter
+                      << " 次，相对残差 " << std::scientific << st.diag[1]
+                      << "（容差 " << cfg.pcg_tol << "）。落盘后中止\n" << std::fixed;
+            compute_particle_forces(cfg, pot, wall, N, st.Rx, st.Ry, st.Rz,
+                                    st.Fx, st.Fy, st.Fz);
+            st.download(ST_VELOCITY | ST_PARTICLE);
+            writer.write(step + 1);
+            rc = 3;
+            break;
+        }
     }
 
     // 终态检查点（目标步），失败路径已在上面落过盘
@@ -306,10 +322,10 @@ static int run_production(const FpdConfig& c)
 
     st.finish();
 
-    // rc=3 是「物理上不该发生的事」：NaN/Inf 发散，或壁面模式下粒子穿墙。
+    // rc=3 是「物理上不该发生的事」：NaN/Inf 发散、粒子穿墙，或 PCG 未收敛。
     // 具体原因已经在上面的错误行里打印过，这里不再猜。
     std::cout << (rc == 0 ? "完成"
-                          : (rc == 3 ? "中止（NaN/发散或粒子穿墙，已落盘）"
+                          : (rc == 3 ? "中止（NaN/发散、粒子穿墙或 PCG 未收敛，已落盘）"
                                      : "因错误中止")) << std::endl;
     return rc;
 }

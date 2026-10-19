@@ -66,7 +66,7 @@ struct FpdState
     // 变系数压力求解的 PCG 暂存（density_on=1 才分配）。
     std::vector<double> h_cg_r, h_cg_s, h_cg_zq;
     std::vector<double> h_tri_w;                    // z 向三对角前推系数
-    std::vector<double> h_diag;                     // 长度 2：|Σb| 与 PCG 最终相对残差
+    std::vector<double> h_diag;                     // 长度 3：|Σb|、PCG 递推残差、真残差
 
     // --- 裸指针视图（= vector::data()，kernel 参数用）---
     double *Rx=0,*Ry=0,*Rz=0, *Rux=0,*Ruy=0,*Ruz=0;
@@ -81,7 +81,7 @@ struct FpdState
     double *fft=0,*randD=0,*randN=0;
     double *cg_r=0,*cg_s=0,*cg_zq=0;                // PCG 暂存（density_on=0 时为 null）
     double *tri_w=0;                                // z 向三对角系数
-    double *diag=0;                                 // 长度 2（见 Poisson.h）
+    double *diag=0;                                 // 长度 3（见 Stokes.h）
 
     cufftHandle       plan_xy = 0;                  // xy 向 2D 批量 FFT 计划（batch=Nz）
     curandGenerator_t gen  = 0;

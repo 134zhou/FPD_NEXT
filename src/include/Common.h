@@ -33,6 +33,10 @@ struct NS_Config
     // 由 Config.cpp 的 make_ns_config(FpdConfig) 按 ratio_rho != 1 设置；
     // 判据代码自己构造 NS_Config 时保持 0。
     int    density_on;
+
+    // 变系数 PCG 的相对残差容差 ||r||/||b||（只在 density_on=1 时使用）。
+    // 默认 1e-12；配置键 pcg_tol 可放松，依据见 --pcg-noise 与 --check-density-fdt。
+    double pcg_tol;
 };
 
 // --- 相场参数（POD，按值进 GPU kernel）---
@@ -86,6 +90,7 @@ static inline NS_Config make_ns_config(int Nx, int Ny, int Nz,
     cfg.W      = noise_on ? sqrt(2.0 * kT / dt) : 0.0;
     cfg.noise_gamma1 = 0;
     cfg.density_on   = 0;
+    cfg.pcg_tol      = 1e-12;
     return cfg;
 }
 

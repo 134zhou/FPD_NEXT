@@ -51,13 +51,21 @@ void apply_laplacian_var(NS_Config cfg,
                          const double* p, double* out);
 
 // PCG 解 L p = b（等价地 A p = -b，A = -L），预条件器 B = -a_bar * M
-// （M 是上面的常系数 Laplacian，a_bar 是实际参与算子的面心 a 的均值；
-//  a_bar == 1 时退化成上面那个常系数求解器，直接复用 solve_pressure，
-//  不复制 FFT/Thomas。a_bar 缩放对稠密体系把迭代数降一个量级）。
+// （M 是上面的常系数 Laplacian，直接复用 solve_pressure，不复制 FFT/Thomas；
+//  a_bar 是实际参与算子的面心 a 的均值。标量缩放不改变 PCG 的迭代序列）。
+//
+// 收敛速度：对任意 x，x^T A x = Σ_f a_f (grad x)_f²，所以 B^-1 A 的谱落在
+// [a_min, a_max]/a_bar，条件数 κ <= max(rho)/min(rho)，与网格和粒子数无关。
+// CG 误差界 2 q^k，q = (√κ-1)/(√κ+1)：ratio_rho=2 时到 1e-12 约 16 次（实测 16）。
+//
+// 容差：cfg.pcg_tol（配置键 pcg_tol，默认 1e-12），上限 PCG_MAX_ITER。
 //
 //   cg_r：入口装 b，出口是残差（就地覆盖）。
 //   cg_s / cg_zq：调用方提供的 size 暂存。
 //   diag：[0] 写 |Σb|（相容性），[1] 写最终相对残差 ||r||/||b||。
+//         两者在主机侧与设备侧【都】是最新值（函数末尾 update device），所以主循环
+//         每步可直接读主机 diag[1] 判断收敛，无需额外同步。
+//         收敛 ⟺ diag[1] <= tol；达到上限或 CG 中断（sq >= 0 / rz <= 0）时 diag[1] > tol。
 //   返回值：迭代数（0 表示 b == 0）。
 //
 // 常数零空间：r0 与最终 p 都显式去均值。预条件器输出自带的任意常数【不】逐次投影 ——
@@ -67,6 +75,8 @@ void apply_laplacian_var(NS_Config cfg,
 //   p_ref 是设备上的零均值参考解；res 存 ||r||/||b||，err 存去均值后的
 //   ||p-p_ref||（未归一化，调用方按 ||p_ref|| 归一化）。仅用于
 //   --debug-pcg 测「多少步到双精度地板」，不参与生产求解。
+static const int PCG_MAX_ITER = 200;
+
 struct PcgTrace
 {
     const double* p_ref = 0;   // device，零均值；null 则不记误差

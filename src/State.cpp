@@ -80,7 +80,7 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
         h_tmp_fx.assign(size, 0); h_tmp_fy.assign(size, 0); h_tmp_fz.assign(size, 0);
         h_fft.assign(size * 2, 0);
         h_randD.assign(slotD, 0); h_randN.assign(slotN, 0);
-        h_diag.assign(2, 0);
+        h_diag.assign(3, 0);
         // 变系数压力求解的 PCG 暂存只在 density_on=1 时分配：
         // 残差/搜索方向/预条件输出各一个 size 数组；常系数路径用不到
         //（step_navier_stokes 收到 null 也不读）。
@@ -130,7 +130,7 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
         api_create(fft, size * 2 * sizeof(double));
         api_create(randD, slotD * sizeof(double));
         api_create(randN, slotN * sizeof(double));
-        api_create(diag, 2 * sizeof(double));   // [0]=|Σb|, [1]=PCG 最终相对残差
+        api_create(diag, 3 * sizeof(double));   // [0]=|Σb|, [1]=PCG 递推残差, [2]=真残差
         api_copyin(tri_w, nbSize);
     }
 
@@ -158,7 +158,7 @@ void FpdState::finish()
     // 逆序 delete；acc_delete 幂等（不在 present 表时是 no-op）
     if (parts & ST_SOLVER)
     {
-        api_delete(diag, 2 * sizeof(double));
+        api_delete(diag, 3 * sizeof(double));
         if (cg_r) { api_delete(cg_zq, nbSize); api_delete(cg_s, nbSize); api_delete(cg_r, nbSize);
                     cg_r = 0; cg_s = 0; cg_zq = 0; }
         api_delete(randN, slotN * sizeof(double));
@@ -239,8 +239,8 @@ void FpdState::download(unsigned bits)
         api_down(vx, nbSize); api_down(vy, nbSize); api_down(vz, nbSize);
     }
     // ST_SOLVER 的临时场不下载（仅供 step_navier_stokes 内部使用）；
-    // 例外是 diag：[0]=|Σb|，[1]=变系数路径的 PCG 最终相对残差（生产要监控）。
-    if (bits & ST_SOLVER) { api_down(diag, 2 * sizeof(double)); }
+    // 例外是 diag：[0]=|Σb|，[1]=变系数路径的 PCG 递推残差，[2]=投影后的真残差。
+    if (bits & ST_SOLVER) { api_down(diag, 3 * sizeof(double)); }
 }
 
 void FpdState::upload(unsigned bits)

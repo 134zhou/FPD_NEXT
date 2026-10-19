@@ -209,8 +209,8 @@ int solve_pressure_var(NS_Config cfg,
 {
     const int Nx = cfg.Nx, Ny = cfg.Ny, Nz = cfg.Nz;
     const size_t size = (size_t)Nx * (size_t)Ny * (size_t)Nz;
-    const double tol = trace ? trace->tol : 1e-12;
-    const int max_iter = trace ? trace->max_iter : 200;
+    const double tol = trace ? trace->tol : cfg.pcg_tol;
+    const int max_iter = trace ? trace->max_iter : PCG_MAX_ITER;
     if (trace) { trace->n = 0; }
 
     // --- 1. 右端统计：sum(b) 用于相容性诊断与去均值，||b|| 用于相对判据 ---
@@ -241,8 +241,9 @@ int solve_pressure_var(NS_Config cfg,
     }
 
     // 预条件器的标量缩放：B = -a_bar * M，a_bar 是【实际参与算子的面】的平均 a。
-    // 这不是新机制，只是把 M 的系数从 1 换成 a_bar：FFT 求解后再乘 1/a_bar。
-    // 壁面 z 面（k = Nz-1）不参与算子，不计入平均。
+    // FFT 求解后再乘 1/a_bar。壁面 z 面（k = Nz-1）不参与算子，不计入平均。
+    // ⚠️ PCG 对预条件器的标量缩放不变（z、alpha 同比抵消，beta 不变），所以它在精确算术下
+    //    不改变迭代序列与迭代数，只是让 z 与 r 同量级；保留它是为了不改动已归档的逐位结果。
     double sa = 0.0;
     #pragma acc parallel loop collapse(3) reduction(+:sa) present(inv_rho_x, inv_rho_y, inv_rho_z)
     for (int i = 0; i < Nx; i++)

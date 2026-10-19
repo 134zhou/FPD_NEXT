@@ -396,5 +396,37 @@ int step_navier_stokes
         }
     }
 
+    // --- 6. 真残差（仅变系数路径）---
+    // div v^{n+1} = div v* - dt·div(a grad p) = dt·(b - L p)，所以两者的范数之比就是
+    // 不经 PCG 递推的相对残差。z 向下邻居用 (k-1+Nz)%Nz：k=0 时读到恒 0 的上壁层。
+    if (cfg.density_on)
+    {
+        double s_new = 0.0, s_star = 0.0;
+        #pragma acc parallel loop collapse(3) reduction(+:s_new, s_star) present(vx, vy, vz, tmp_fx, tmp_fy, tmp_fz)
+        for (int i = 0; i < Nx; i++)
+        {
+            for (int j = 0; j < Ny; j++)
+            {
+                for (int k = 0; k < Nz; k++)
+                {
+                    const int ijk = IDX(i, j, k);
+                    const int im = (i - 1 + Nx) % Nx;
+                    const int jm = (j - 1 + Ny) % Ny;
+                    const int km = (k - 1 + Nz) % Nz;
+                    const double dn = (vx[ijk] - vx[IDX(im, j, k)])
+                                    + (vy[ijk] - vy[IDX(i, jm, k)])
+                                    + (vz[ijk] - vz[IDX(i, j, km)]);
+                    const double ds = (tmp_fx[ijk] - tmp_fx[IDX(im, j, k)])
+                                    + (tmp_fy[ijk] - tmp_fy[IDX(i, jm, k)])
+                                    + (tmp_fz[ijk] - tmp_fz[IDX(i, j, km)]);
+                    s_new  += dn * dn;
+                    s_star += ds * ds;
+                }
+            }
+        }
+        diag[2] = (s_star > 0.0) ? sqrt(s_new / s_star) : 0.0;
+        #pragma acc update device(diag[2:1])
+    }
+
     return cg_iter;
 }
