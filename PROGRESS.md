@@ -93,8 +93,9 @@ W5'a（FDT 矩阵恒等式，随 `adv_on/noise_skip` 删除）、粒子速度涨
    - `512x512x128_2.cfg` 的 `init_file` 是第 600000 步检查点而 `n_steps = 600000`，启动即「无事可做」；
    - `lattice512.cfg`、`lattice512_2.cfg`、`512x512x128.cfg` 的 `gravity_z = +0.58716` 指向 +z（沿用旧配置的正号），需确认是否有意；
    - `gravity_z = -100` 已按新语义换算为 `-0.58716`；首行构型注释已改正。
-4. **`tools/make_init.py`** 的注释修正与用户自己未提交的数据块改动（512×512×128、51×51×11）混在一起，未提交。
-5. **`doc/` 下用户未提交的修改**（discretization / fourier-projection / ns-equation、`Stokes_line_by_line.md`）保持原样，未动。
+4. **`doc/` 已移出版本控制**（用户提交 `8a0913b`，`.gitignore` 忽略整个 `doc/`）：笔记、论文、`old_code/`
+   与 `doc/pressure_split_failed.md` 只在本机。README/AGENTS 里对 `doc/` 的引用指向本地文件；
+   分裂法的代码仍可从 `git show a424dfd`、`0f22da7` 找回。
 
 ## 下一步
 
