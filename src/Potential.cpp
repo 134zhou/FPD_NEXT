@@ -79,7 +79,7 @@ void compute_particle_forces_cpu(NS_Config cfg, PotentialParams pot,
     const double Lx = (double)cfg.Nx, Ly = (double)cfg.Ny;
     const double Lz = pbc_length_z(cfg);   // 壁面模式下退化为恒等映射（z 不折叠）
 
-    // 与 GPU 版是两份独立装配（见 CLAUDE.md 约束 6）：这里的壁面项写在
+    // 与 GPU 版是两份独立装配（AGENTS.md：CPU/GPU 独立参考不能互调）：这里的壁面项写在
     // 逐粒子初始化循环里、用 wall_force_z，而 GPU 版写在 gang 循环末尾。
     for (int n = 0; n < N; n++)
     {

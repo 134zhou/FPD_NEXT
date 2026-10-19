@@ -11,10 +11,10 @@
 // 半格偏移约定、球形截断判据、周期回绕 —— 这三样东西只在本文件出现一次。
 //
 // 背景：Viscosity / Force / Velocity 三个模块曾各自复制粘贴同一段遍历循环，
-// 然后漂移出两个致命缺陷（见 README 的 C1/C2）：力投影用 x-face 的权重、
+// 然后漂移出两个致命缺陷（见 PROGRESS.md 的 C1/C2）：力投影用 x-face 的权重、
 // 归一化却用 cell-center 的求和，导致 Σ_grid f ≠ F_n，产生位置相关的伪力。
 //
-// 现在三个模块共用 stencil_point<L>()，只要 Loc 一致，
+// 现在 Viscosity / Mass / Force / Velocity 共用 stencil_point<L>()，只要 Loc 一致，
 // 「Σ_grid fx == Fx[n]」就是恒等式而非巧合。
 //
 // ⚠️ 代价：本文件成了单点故障。它错了三个模块一起错，

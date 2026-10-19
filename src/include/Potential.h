@@ -15,8 +15,8 @@
 //
 // ⚠️ pair_energy_bare 与 pair_force_over_r_bare 必须【独立实现，互不调用】。
 //    一旦让 force 去调 energy（或反之），判据「F = -dU/dr 数值微分对照」就退化成
-//    自洽的、盲的 —— 与 CLAUDE.md 记录的「力守恒判据对 stencil_point 内部公式
-//    错误是盲的」同一个陷阱。
+//    自洽的、盲的 —— 与「力守恒判据对 stencil_point 内部公式错误是盲的」
+//    （README「数值判据」）同一个陷阱。
 // ============================================================================
 
 enum PotentialType { POT_NONE = 0, POT_WCA = 1, POT_MORSE = 2, POT_LJ126 = 3 };
@@ -79,10 +79,10 @@ static inline double min_image(double d, double L)
 //
 // 实现上不新增分支到 O(N²) 内层：返回一个足够大的数（1e300），min_image 就自动
 // 退化为恒等映射（0.5*1e300 不溢出，且 |d| 永远小于它）。这样「最小镜像只有一份
-// 实现」这条不变量（PROGRESS.md 的关键决策）得以保住。
+// 实现」这条不变量得以保住。
 //
 // ⚠️ 函数【必须保留】，不许内联成常量、也不许只在一侧删掉对它的调用：
-//    CLAUDE.md 约束 6 要求 compute_particle_forces（GPU）与
+//    AGENTS.md 要求 CPU/GPU 独立参考不能互调，compute_particle_forces（GPU）与
 //    compute_particle_forces_cpu 独立维护。若一侧保留了 z 映射、另一侧删了，
 //    CPU/GPU 对照判据【仍然通过】（两边都是恒等映射，判据是盲的），
 //    但「min_image 唯一真值源」的不变量没了，下一次编辑就会漂开。

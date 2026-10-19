@@ -25,9 +25,11 @@ struct FpdConstants
     // 与模拟完全相同的离散求和（stencil_point<FACE_X/Y/Z>）
     double int_phi[3];        // Sum phi_alpha
     double int_phi2[3];       // Sum phi_alpha^2
+    // 以下几列只是 S1、S2 的组合，作文献口径的参考打印；生产代码没有粒子质量，
+    // 不使用其中任何一个。mass（= S1^2/S2）的亚格点散布被借作离散误差的体检量。
     double lambda_T[3];       // lambda^T = int(phi) / int(phi^2)
     double mass_i[3];         // M_i = int(rho phi) = S1 + (ratio_rho-1) S2
-    double mass[3];           // M_eq = (int phi)^2 / int(phi^2) = lambda^T M_i（rho=1）
+    double mass[3];           // M_eq = (int phi)^2 / int(phi^2)
     double mass_eff[3];       // M_eff = 1.5 M_i（附加质量）
     double ratio_rho;         // rho_p / rho_l（只影响 M_i / M_eff 的换算）
 
@@ -55,7 +57,7 @@ void print_fpd_constants(FpdConstants fc, PhiParams pp);
 //    <|V|^2> = 2kT/M_i − 2kT/(rho L^3)）。它是【周期专属】的：第二项是周期盒
 //    k=0 模式被冻结在零的修正，无滑移壁面下总动量本就不守恒（壁面是真实的
 //    动量汇），没有可平移的 k=0 模式，该修正不成立。随 z 周期路径一起删除。
-//    替代判据需要新推导，见 PROGRESS.md 的覆盖损失第 3 条。
+//    替代判据需要新推导，见 PROGRESS.md「已知缺口」第 1 条（W7）。
 
 // ============================================================================
 // 分块平均（block averaging）

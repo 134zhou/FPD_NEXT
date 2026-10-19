@@ -427,7 +427,7 @@ static int cmd_sed_stats(int argc, char** argv)
     }
     printf("  （* = 参与统计窗口 step ∈ [%ld, %ld]）\n", win_lo, win_hi);
 
-    // 采样间隔必须按【物理时间】记账，否则 dt 越小样本越相关（CLAUDE.md 数值定则）。
+    // 采样间隔必须按【物理时间】记账，否则 dt 越小样本越相关（见 PROGRESS.md 关键决策「统计」）。
     // ⚠️ 从【全部检查点】的间距取，不从窗口序列取：窗口里只剩 1 个样本时会退化成
     //    返回 dt，而真实间隔是 interval_ckpt*dt —— 那会把 tau_int 报小几个量级。
     double samp_dt = 0.0;

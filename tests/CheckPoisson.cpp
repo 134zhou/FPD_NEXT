@@ -226,7 +226,7 @@ int run_check_tridiag()
 //   p[ip]+p[im]+p[jp]+p[jm]+p[kp]+p[km] - 6 p[ijk]
 //
 // ⚠️ 这是【手写的独立参考】，不许改成调用 Poisson.cpp 的代码 —— 那会把往返判据
-//    变成自洽的、盲的（CLAUDE.md 约束 3 点名的失效模式，约束 7 讲的正是这个算子）。
+//    变成自洽的、盲的（AGENTS.md：独立参考不得复用待测实现）。
 // ============================================================================
 static void apply_operator(int Nx, int Ny, int Nz, const double* p, double* b)
 {

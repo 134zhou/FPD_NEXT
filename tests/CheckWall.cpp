@@ -396,7 +396,7 @@ static void w6_momentum_budget(int Nx, int Ny, int Nz)
         // 它是每步重算的中间量，download() 按设计不搬运它。
         // ⚠️ 用【运行时 API】而不是 `#pragma acc parallel loop reduction`：
         //    后者在本文件里读到了主机侧的陈旧零值（present 子句与运行时映射
-        //    在此 TU 的配合不可靠），诊断为「Z̄ 恒等于 0」—— 正是 CLAUDE.md 点名的
+        //    在此 TU 的配合不可靠），诊断为「Z̄ 恒等于 0」—— 正是 AGENTS.md 点名的
         //    「present 遗漏不报错，只给垃圾数据」那一类。
         acc_update_self(st.pi_dz, st.size * sizeof(double));
         double Pb[2] = {0.0, 0.0}, Zb[2] = {0.0, 0.0};
@@ -443,7 +443,7 @@ static void w6_momentum_budget(int Nx, int Ny, int Nz)
 //
 // 力守恒 Σ_grid f_α == F_α 在截断下【仍然精确成立】，理由是分子（力投影）与分母
 // （sum_phi_α）是同一个 stencil_point<L> 在同一组点上的求和 —— 截断只是让那组点
-// 变少。这正是 CLAUDE.md 第 1 条约束保证的性质。
+// 变少。这正是 Stencil.h 作为唯一真值源保证的性质。
 //
 // ⚠️ 但这条判据对 stencil_point 的【内部公式错误】仍然是盲的（投影和归一化会一起
 //    错）。所以这里同时跑「均匀流场 v≡1 ⇒ V_i == 1」—— 那条对内部错误不盲。
@@ -1003,10 +1003,10 @@ int run_check_wall(int Nx, int Ny, int Nz)
     r_g1 = last_ratio; s_g1 = last_sigma;
 
     // ⚠️ 判据的形态：**差分**，不是绝对。
-    //    4³ 小盒子里这台量测机器本身带 ~1.7% 的系统偏差，来源是 dim 的约定
-    //    （冻结模式数）+ 显式 Euler 的 O(dt) 偏差，与壁面无关。所以能可靠交付的
-    //    判据是「γ=2 是否被数据选中」，而不是「比值是否精确为 1」。
-    //    绝对一致需要更大的盒子 + dt 外推，见 PROGRESS.md 的遗留问题。
+    //    4³ 小盒子的绝对比值受 dim 约定（冻结模式数）与显式 Euler 的 O(dt) 偏差影响
+    //    （当前 γ=2 实测 1.0079±0.0030；Stokes 三 kernel 重构前曾是 0.975）。
+    //    所以能可靠交付的判据是「γ=2 是否被数据选中」，而不是「比值是否精确为 1」。
+    //    绝对一致需要更大的盒子 + dt 外推，见 PROGRESS.md「已知缺口」第 3 条。
     {
         const double diff = r_g2 - r_g1;
         const double sd   = std::sqrt(s_g2 * s_g2 + s_g1 * s_g1);

@@ -29,9 +29,9 @@
 enum StatePart : unsigned
 {
     ST_PARTICLE = 1u,   // Rx..sum_phiz（15 个 N 数组）
-    ST_PHI      = 2u,   // fx,fy,fz,eta,etaXY,etaYZ,etaZX（7 个 size 数组）
-    ST_VELOCITY = 4u,   // vx,vy,vz,p（4 个 size 数组）
-    ST_SOLVER   = 8u,   // pi_d*/pi_n*/tmp_f*/fft/randD/randN + plan + gen
+    ST_PHI      = 2u,   // fx,fy,fz,inv_rho_x/y/z,eta,etaXY（8 个 size 数组）+ etaYZ,etaZX（棱边）
+    ST_VELOCITY = 4u,   // vx,vy,vz,p（4 个 size 数组；p 不下载）
+    ST_SOLVER   = 8u,   // pi_d*/pi_n*/tmp_f*/fft/randD/randN/tri_w/diag（+ cg_*）+ plan + gen
 };
 
 constexpr unsigned ST_STENCIL   = ST_PARTICLE | ST_PHI;

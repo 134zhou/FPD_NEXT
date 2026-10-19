@@ -200,11 +200,11 @@ int step_navier_stokes
     // --- 3a. 显式一步：v* = v + dt·[ -(v·∇)v + a·(-∇·τ_vis - ∇·noise + f) ] ---
     // 每个面心只算【一次】(∇·Π)_α，直接写 tmp_fα = v*（tmp_f* 复用为 v* 的存储，
     // 零额外显存）。原实现把每个面算了两次（d_pix_ijk 与左邻的 d_pix_im 是同一个量），
-    // 这里消掉重复，Π 的读取减半 —— 正对 README 记录的缓存瓶颈。
+    // 这里消掉重复，Π 的读取减半（散度段的 k±1 跨步访存是主要的缓存压力）。
     //
     // ⚠️ 1/rho 只乘【力密度】，不乘对流加速度。ρDv/Dt 两边除以 ρ 后对流项在左边、
     //    系数是 1；把整个 ∇·Π 都乘 a 会得到 ρ∂t v + ∇·(vv) = ...，既不是非守恒形式
-    //    也不是守恒形式（tmp.txt 的 V0 反例：均匀 a 下对流加速度会被错误地缩放）。
+    //    也不是守恒形式（反例：均匀 a 下对流加速度会被错误地缩放 a 倍，即 --check-poisson 的 V0）。
     //    d_pix 仍是总通量散度（W6 的动量收支用它的 Π_zz），这里把它拆成
     //    d_adv（对流）与 d_visc = d_pix - d_adv（粘性+噪声）。
     #pragma acc parallel loop collapse(3) present(vx, vy, vz, fx, fy, fz, inv_rho_x, inv_rho_y, inv_rho_z, pi_dx, pi_dy, pi_dz, pi_nx, pi_ny, pi_nz, tmp_fx, tmp_fy, tmp_fz)

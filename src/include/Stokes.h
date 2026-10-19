@@ -21,8 +21,10 @@
 //   3. 但同一 offset 生成同样数量必定逐位可复现，且不同 offset slot 之间
 //      零共同值、互相关 ~1/sqrt(n)（即统计独立）
 //
-// 于是采用 slot 方案：每次生成前显式 setGeneratorOffset 到
-//   offset(step, c) = (2*step + c) * (size*3),   c ∈ {0,1}
+// 于是采用 slot 方案：每步占一段长 slotD + slotN 的随机数流，生成前显式定位：
+//   base = step * (slotD + slotN)
+//   randD（体心对角噪声）从 base 开始，randN（棱边剪切噪声）从 base + slotD 开始
+// slotD = 3*Nx*Ny*Nz、slotN = 3*Nx*Ny*(Nz+1)，均向上取偶（见 Wall.h 的 wz_rand_slot_*）。
 // 重启时按同一公式算出同一 offset，逐位相等是构造上保证的，与跑了多少步无关。
 // ---------------------------------------------------------------------------
 // 返回变系数路径的 PCG 迭代数；常系数路径（density_on=0）返回 0。

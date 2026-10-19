@@ -34,7 +34,7 @@ static void fill_derived(FpdConstants& c)
         c.lambda_T[d] = c.int_phi[d] / c.int_phi2[d];
         // M_i = int(rho phi) = S1 + (ratio_rho-1) S2（文献的质量口径）
         c.mass_i[d]   = c.int_phi[d] + (c.ratio_rho - 1.0) * c.int_phi2[d];
-        // M_eq = S1^2/S2 = lambda^T M_i；rho=1 时它就是旧文档误标成 M_i 的量
+        // M_eq = S1^2/S2
         c.mass[d]     = c.int_phi[d] * c.int_phi[d] / c.int_phi2[d];
         c.mass_eff[d] = 1.5 * c.mass_i[d];
     }
@@ -137,8 +137,7 @@ void print_fpd_constants(FpdConstants fc, PhiParams pp)
     printf("  a = %.4f   xi = %.4f   eta_c/eta_l = %.1f   rho_p/rho_l = %.4f   截断半径 = %.1f   模板盒 %d^3\n",
            pp.radius, 1.0 / pp.inv_xi, pp.ratio_eta, fc.ratio_rho, sqrt(pp.range2), pp.n_range);
     printf("\n");
-    // 四个质量口径别混：M_i 是文献的 int(rho phi)；M_eq = S1^2/S2 = lambda^T M_i
-    // 才是代码里力→加速度的离散比值；M_eff 是附加质量估计。旧文档把 M_eq 标成了 M_i。
+    // lambda^T / M_i / M_eq / M_eff 只是 S1、S2 的组合（文献口径参考），生产代码不使用。
     printf("  方向      int(phi)      int(phi^2)    lambda^T      M_i        M_eq       M_eff\n");
     for (int d = 0; d < 3; d++)
     {

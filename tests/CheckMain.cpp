@@ -1,12 +1,14 @@
 // fpd_check —— 自检与验证路径的独立可执行入口
 //
 //   fpd_check --check
+//   fpd_check --check-config
 //   fpd_check --check-potential
 //   fpd_check --check-tridiag
 //   fpd_check --check-poisson [Nx Ny Nz]
 //   fpd_check --check-wall [Nx Ny Nz]
 //   fpd_check --debug-pcg [Nx Ny Nz]
-//   fpd_check --lambda [L]
+//   fpd_check --check-mass [Nx Ny Nz]
+//   fpd_check --lambda [L] [ratio_rho]
 //
 // 从 fpd 拆出：main.cpp 里的自检路径搬到这里，生产主循环留在 fpd。
 // 拆分后 fpd 的 main 只做配置解析 + run_production。

@@ -45,7 +45,7 @@ std::vector<FieldDesc> config_fields(FpdConfig& c)
         {"wall_rcut",      F_DOUBLE, &c.wall_rcut,      false, "壁面势 LJ/Morse 截断间隙（WCA 派生，不应给）"},
         {"wall_shift",     F_STRING, &c.wall_shift,     false, "壁面势截断移位: none|energy|force"},
 
-        {"init_file",      F_STRING, &c.init_file,      false, ".fpd 初始构型或续跑文件；留空用内置默认"},
+        {"init_file",      F_STRING, &c.init_file,      false, ".fpd 初始构型或续跑文件（必须提供）"},
         {"out_dir",        F_STRING, &c.out_dir,        false, "输出目录"},
         {"run_name",       F_STRING, &c.run_name,       false, "输出文件名前缀"},
         {"interval_ckpt",  F_LONG,   &c.interval_ckpt,  false, "每多少步写一个 .fpd"},
