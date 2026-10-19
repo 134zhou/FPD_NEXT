@@ -33,6 +33,7 @@ struct Holder
 {
     std::vector<double> vx, vy, vz;
     std::vector<double> Rx, Ry, Rz, Rux, Ruy, Ruz, Vx, Vy, Vz, Fx, Fy, Fz;
+    std::vector<double> p, p_prev;          // 仅含压力历史的 v4 文件
     CkptArrays a;
 
     void alloc(const CkptHeader& h)
@@ -50,24 +51,28 @@ struct Holder
         a.Rux = Rux.data(); a.Ruy = Ruy.data(); a.Ruz = Ruz.data();
         a.Vx = Vx.data(); a.Vy = Vy.data(); a.Vz = Vz.data();
         a.Fx = Fx.data(); a.Fy = Fy.data(); a.Fz = Fz.data();
+        if (h.has_pressure())
+        {
+            p.assign(size, 0); p_prev.assign(size, 0);
+            a.p = p.data(); a.p_prev = p_prev.data();
+        }
     }
 };
 
-// .fpd 尺寸判据：v3 不含 p，文件大小必须精确等于
-//   40（magic+endian+header）+ (3*size + 12*N)*8（数组）+ 8（校验和）
-//   = 48 + 24*size + 96*N。
-// 任何新增的整场数组（尤其是 p）都会让这条守卫失败 —— 这是「p 不入档」的回归判据。
+// .fpd 尺寸判据：文件大小必须精确等于 CkptHeader::file_bytes()
+//   v3：48 + 24*size + 96*N；v4：52 + 24*size + 96*N，含压力历史时再加 16*size。
+// 任何未声明的整场数组都会让这条守卫失败 —— 压力只能经 FPD_FLAG_PRESSURE 显式入档。
 static bool check_ckpt_size(const char* path, const CkptHeader& h)
 {
     struct stat st;
     if (stat(path, &st) != 0) { fprintf(stderr, "错误: 无法 stat %s\n", path); return false; }
 
-    const long long expected = 48LL + 24LL * (long long)h.size() + 96LL * (long long)h.N;
-    printf("  文件大小     %lld 字节（无 p 期望 %lld）\n",
-           (long long)st.st_size, expected);
+    const long long expected = h.file_bytes();
+    printf("  文件大小     %lld 字节（%s期望 %lld）\n",
+           (long long)st.st_size, h.has_pressure() ? "含压力历史 " : "无 p ", expected);
     if ((long long)st.st_size != expected)
     {
-        fprintf(stderr, "错误: %s 的大小 %lld 与无 p 布局 %lld 不符（多了/少了整场数组？）\n",
+        fprintf(stderr, "错误: %s 的大小 %lld 与声明的布局 %lld 不符（多了/少了整场数组？）\n",
                 path, (long long)st.st_size, expected);
         return false;
     }
@@ -83,7 +88,8 @@ static int cmd_dump(int argc, char** argv)
     if (!read_ckpt_header(path, h, err)) { fprintf(stderr, "错误: %s\n", err.c_str()); return 1; }
 
     printf("=== %s ===\n", path);
-    printf("  version      %u\n", h.version);
+    printf("  version      %u   flags 0x%x%s\n", h.version, h.flags,
+           h.has_pressure() ? "（含压力历史 p、p_prev）" : "");
     printf("  网格         %d x %d x %d   (size = %zu)\n", h.Nx, h.Ny, h.Nz, h.size());
     printf("  粒子数 N     %d\n", h.N);
     printf("  step         %lld\n", (long long)h.step);
@@ -161,12 +167,21 @@ static int cmd_diff(const char* pa, const char* pb)
         {"Fx", A.Fx.data(), B.Fx.data(), N},
         {"Fy", A.Fy.data(), B.Fy.data(), N},
         {"Fz", A.Fz.data(), B.Fz.data(), N},
+        // 压力历史：两边都有才比（只有一边有时在下面报告）
+        {"p",      A.p.data(),      B.p.data(),      (ha.has_pressure() && hb.has_pressure()) ? size : 0},
+        {"p_prev", A.p_prev.data(), B.p_prev.data(), (ha.has_pressure() && hb.has_pressure()) ? size : 0},
     };
 
     int nbad = 0;
     printf("=== diff %s  vs  %s ===\n", pa, pb);
+    if (ha.has_pressure() != hb.has_pressure())
+    {
+        nbad++;
+        printf("  压力历史只在一边存在（flags 0x%x vs 0x%x）\n", ha.flags, hb.flags);
+    }
     for (size_t t = 0; t < sizeof(items)/sizeof(items[0]); t++)
     {
+        if (items[t].n == 0 && (items[t].name[0] == 'p')) { continue; }
         const Item& it = items[t];
         size_t ndiff = 0; double maxabs = 0.0, maxrel = 0.0;
         for (size_t i = 0; i < it.n; i++)

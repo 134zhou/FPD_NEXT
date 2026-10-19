@@ -56,10 +56,12 @@ static int run_production(const FpdConfig& c)
     FpdState st;
     st.init(cfg, N, ST_FULL, c.seed);
     CkptArrays arr = st.ckpt_arrays();
+    // 压力历史只有分裂法用得上；其余情况读过去但丢弃（仍参与校验和）。
+    if (cfg.split) { arr.p = st.p; arr.p_prev = st.p_prev; }
     if (!read_checkpoint(reader, h, arr, err))
     { std::cerr << "错误: " << err << "\n"; st.finish(); return 2; }
     std::cout << "从 " << c.init_file << " 载入（step=" << h.step
-              << "，N=" << N << "）\n";
+              << "，N=" << N << (h.has_pressure() ? "，含压力历史" : "") << "）\n";
 
     // 壁面不变量【直接】检查：上壁那一层 vz 必须逐位为 0。
     //
@@ -90,6 +92,14 @@ static int run_production(const FpdConfig& c)
 
     // st.init 在载入前映射了初始 0；现在把文件数组上传到设备
     st.upload(ST_PARTICLE | ST_VELOCITY);
+    // 压力分裂法的有效压力层数（p、p_prev）。文件带压力历史时直接续上（逐位重启），
+    // 否则前 2 步用 PCG 重新建立。
+    int p_hist = 0;
+    if (cfg.split && h.has_pressure())
+    {
+        acc_update_device(st.p_prev, (size_t)size * sizeof(double));   // st.upload 已传 p
+        p_hist = 2;
+    }
 
     // 粒子间势、壁面势与重力加速度
     const PotentialParams pot  = make_potential_params(c);
@@ -147,17 +157,29 @@ static int run_production(const FpdConfig& c)
     int rc = 0;
 
     // 只做文件 IO。arr 每次 write 现场从 st 取，不持有陈旧指针。
+    // 分裂法且压力历史完整时额外写入 p、p_prev（v4 flags bit0），保证逐位重启；
+    // 其余情况与 v3 载荷相同。p 不走 FpdState::download，这里显式拉回。
     struct CkptWriter
     {
         const FpdConfig& c;
         const CkptHeader& h;
         FpdState& st;
+        const int& p_hist;
 
         bool write(long step) const
         {
             CkptHeader oh = h;
             oh.step = step;
+            oh.flags = 0;
             CkptArrays oa = st.ckpt_arrays();
+            if (st.cfg.split && p_hist >= 2)
+            {
+                const size_t nb = st.size * sizeof(double);
+                acc_update_self(st.p, nb);
+                acc_update_self(st.p_prev, nb);
+                oh.flags = FPD_FLAG_PRESSURE;
+                oa.p = st.p; oa.p_prev = st.p_prev;
+            }
 
             const std::string path = ckpt_path(c.out_dir, c.run_name, step);
             std::string e2;
@@ -166,7 +188,7 @@ static int run_production(const FpdConfig& c)
             return true;
         }
     };
-    const CkptWriter writer{c, h, st};
+    const CkptWriter writer{c, h, st, p_hist};
 
     // 粒子越界检查。只在已经 download 过 ST_PARTICLE 的地方调用 ——
     // 不做每步的 device→host 同步（那会把 GPU 流水线打断）。
@@ -201,8 +223,6 @@ static int run_production(const FpdConfig& c)
 
     // 变系数压力求解的迭代数统计（只在 density_on 时有意义）
     long cg_sum = 0, cg_max = 0, cg_cnt = 0;
-    // 压力分裂法的有效压力层数（p、p_prev）。不入档：重启后重新用 PCG 建立。
-    int p_hist = 0;
 
     for (long step = start_step; step < c.n_steps; step++)
     {
