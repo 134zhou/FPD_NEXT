@@ -9,6 +9,7 @@ add_executable(fpd_check
     CheckWall.cpp
     CheckMass.cpp
     CheckPcgNoise.cpp
+    PcgCalib.cpp
 )
 target_link_libraries(fpd_check PRIVATE fpd_core)
 
@@ -16,5 +17,9 @@ target_link_libraries(fpd_check PRIVATE fpd_core)
 # 避免在 Python 侧再定义一份分块平均和平台判据。
 add_executable(fpd_tool tool_main.cpp Analysis.cpp)
 target_link_libraries(fpd_tool PRIVATE fpd_core)
+
+# 变密度压力求解的容差标定：跑 fpd 之前手动运行，核心与 fpd_check --pcg-noise 共用。
+add_executable(fpd_calib calib_main.cpp PcgCalib.cpp)
+target_link_libraries(fpd_calib PRIVATE fpd_core)
 
 # spike/ 是一次性前置风险验证，不定义 CMake 目标。
