@@ -1,13 +1,13 @@
 # 进度记录
 
-最后更新：2026-10-19（压力求解精度验收：pcg_tol、W5c、--pcg-noise、分裂法、.fpd v4）
+最后更新：2026-10-19（fpd_calib 容差标定；压力分裂法与 .fpd v4 移出主路径）
 
 ## 当前状态
 
 生产路径完整可用：MAC 交错网格流体求解器、x/y 周期 + z 无滑移壁面、相场粘度与力投影、
-粒子间势与粒子-壁面势、变密度（`ratio_rho`）惯性与重力体力、`.fpd` v4 初态/检查点/逐位重启、
-离线 VTK 转换。变密度压力求解的精度已用「误差 / 同一步热噪声」判据验收（`--pcg-noise`、W5c），
-有噪声时推荐 `pcg_tol = 1e-6`（默认仍为 1e-12，待用户决定是否改默认）。
+粒子间势与粒子-壁面势、变密度（`ratio_rho`）惯性与重力体力、`.fpd` v3 初态/检查点/逐位重启、
+离线 VTK 转换。变密度算例的 `pcg_tol` 由用户在跑 `fpd` 前用独立程序 `fpd_calib` 标定
+（判据：残差导致的粒子速度误差 ≤ 同一步热噪声增量 × 1e-3）；默认仍为 1e-12。
 
 尚未完成的物理验证：粒子侧 FDT（W7）、绝对 Stokes 阻力（Phase 4 的 L 外推）、
 沉降运行到稳态给出 `U(φ)`、旧代码对照。
@@ -26,7 +26,7 @@
 | 7 | z 向无滑移壁面（7-A 求解器，7-B 接线） | ✅ |
 | 8-A | 删除三维 FFT 与 z 周期路径 | ✅ |
 | 密度 | `ratio_rho` 变密度惯性 + 重力体力 + 变系数投影（PCG） | ✅ 2026-10-17/18 |
-| 压力精度 | PCG 容差验收、真残差与每步收敛检查、分裂法评估、.fpd v4 | ✅ 2026-10-19 |
+| 压力精度 | PCG 容差判据、真残差与每步收敛检查、`fpd_calib` 标定程序；分裂法评估后移出 | ✅ 2026-10-19 |
 
 ## 判据覆盖
 
@@ -37,12 +37,12 @@
 | 相场投影/平均（Stencil、Force、Velocity、Viscosity） | `--check`：力守恒、亚格点、Σφ² 混叠、N=2 重叠均匀流；W4/W4s 壁面截断 |
 | 势与力装配 | `--check-potential` J1–J6；`--check` 的 J5（GPU/CPU、逐位、投影守恒） |
 | 常系数压力 | `--check-tridiag`；`--check-poisson` P5/P6 |
-| 变系数压力与变密度显式步 | `--check-poisson` V0–V6；`--debug-pcg`（P0）；`--pcg-noise`（PN1：误差/噪声）；`--check-density-fdt`（W5c：变密度能量均分与容差成对差） |
+| 变系数压力与变密度显式步 | `--check-poisson` V0–V5；`--debug-pcg`（P0）；`--pcg-noise`（PN1，fpd_calib 同一核心）；`--check-density-fdt`（W5c：变密度能量均分与容差成对差） |
 | 壁面流体力学 | `--check-wall` W1、W2、W3、W3b、W6；噪声 √2 由 W5b 统计差分判据负责 |
 | 壁面势 | W8a–W8e |
 | 质量场与重力 | `--check-mass` MA1–MA7 |
-| 配置 | `--check-config`（35 项） |
-| IO | `--dump-ckpt` 尺寸守卫（v3/v4、含压力历史）；`--at 3 1 1` = 3001001；`fpd2vtk.py --self-test`；`verify_vtk.py` 往返 |
+| 配置 | `--check-config`（34 项） |
+| IO | `--dump-ckpt` 尺寸守卫；`--at 3 1 1` = 3001001；`fpd2vtk.py --self-test`；`verify_vtk.py` 往返 |
 
 不在常驻覆盖内（历史结论或缺口）：3A 的 `bias% ≈ 335·dt`、3B 的「O(dt) 偏差不被 η_c 放大」、
 W5'a（FDT 矩阵恒等式，随 `adv_on/noise_skip` 删除）、粒子速度涨落（W7）。
@@ -69,9 +69,9 @@ W5'a（FDT 矩阵恒等式，随 `adv_on/noise_skip` 删除）、粒子速度涨
 8. **壁面附近各向异性判据会 FAIL 是设计行为**：`Analysis.cpp` 的 `spread_int_phi2`/`spread_subgrid`
    假设三方向等价，测试粒子须离两壁 ≥ range；检验截断对称性用 W4s。
 9. **PCG 成本**：迭代数与网格无关（κ ≤ ρ_max/ρ_min），`sed.cfg` 默认容差 35.9 步/秒、
-   `pcg_tol=1e-6` 53.3 步/秒、等密度 134.8 步/秒。`ratio_rho` 很大时迭代数按 √κ 增长。
-10. **确定性算例的容差**：`--pcg-noise` 的门槛以噪声为尺度，`noise_on=0` 时不适用；
-    这类算例按所测量的精度保留紧容差。分裂法有噪声时不满足门槛（见历史 2026-10-19）。
+   `pcg_tol=1e-6` 53.3、`1e-4` 61.1 步/秒、等密度 134.8 步/秒。`ratio_rho` 很大时迭代数按 √κ 增长。
+10. **确定性算例的容差**：`fpd_calib` 的门槛以噪声为尺度，`noise_on=0` 时不适用（程序直接说明并退出）；
+    这类算例按所测量的精度保留紧容差。
 11. **绝对阻力**：单粒子终端速度比解析 Stokes 小约 2.8 倍（扩散界面有效半径）；
     `a/L_z = 0.1` 时壁面与镜像偏差 10% 量级。
 12. `-Minfo` 报 `stencil_point` 引用出参用 local memory；目前不是瓶颈。
@@ -88,7 +88,6 @@ W5'a（FDT 矩阵恒等式，随 `adv_on/noise_skip` 删除）、粒子速度涨
 
 备选池（有价值但未立项）：
 
-- **默认 `pcg_tol` 改为 1e-6**：数据已支持（见历史 2026-10-19），等用户决定。
 - **大 `ratio_rho` 的预条件**：κ ≳ 10 时考虑两级预条件或多重网格。
 - **离线精确预测器** `C = kT(I - Ã·dt/2)⁻¹`：曾重现 3A 四个数据点到 2.1–2.5%，是验证亚 1%
   偏差的唯一可行路径。
@@ -127,9 +126,10 @@ W5'a（FDT 矩阵恒等式，随 `adv_on/noise_skip` 删除）、粒子速度涨
 | 变密度显式步 | 1/ρ 只乘力密度，对流项不乘 | ρDv/Dt 除以 ρ 后对流系数为 1；V0 守护 |
 | 变系数投影 | PCG，预条件器 `-ā·M` 复用常系数求解器，p0=0 | 不复制 FFT/Thomas；条件数与网格无关（≤ ρ_max/ρ_min），16 次/步已接近最优；warm start 会破坏逐位重启 |
 | 压力求解精度判据 | 误差与**同一步噪声增量**比，门槛 1e-3（ε_E 与 ε_V） | 用户提出「误差比热噪声小即可」；对照尺度取单步增量而非平衡态热速度（后者大 5 倍，会放松过头）；误差不累积（下一步重新投影） |
-| `pcg_tol` 推荐值 | 1e-6（满足门槛的最松档 1e-4 再收紧 100 倍） | 端到端 5000 步 ΔR 3e-8 ≪ seed 差 0.41；W5c 温度差 6e-12；吞吐 +48% |
-| 压力分裂法 | 实现为可选项，不作默认 | 每步 1 次 FFT、div v 机器精度、吞吐 ×2.8，但噪声主导的压力在步间几乎不相关，外推误差在粒子速度上与噪声增量同量级（ε_V = 1.8） |
-| `.fpd` 压力 | v4 flags bit0 可选保存 p、p_prev | 只为分裂法逐位重启；PCG 路径与 v3 载荷逐字节相同 |
+| `pcg_tol` 怎么定 | 独立程序 `fpd_calib`，用户跑 `fpd` 前手动运行，推荐值手动写入配置 | 判据依赖真实配置与状态（噪声占比、ε_V/残差）；不做运行时自适应（逐位重启与判停逻辑更简单）；实测 τ* 与 kT 无关 |
+| 压力分裂法 | 移出主路径，记录在 `doc/pressure_split_failed.md` | 吞吐 ×2.8，但噪声主导的压力步间几乎不相关，外推误差在粒子速度上比噪声增量大（ε_V = 1.8） |
+| `.fpd` 版本 | 回退 v3 | v4 只为分裂法存压力历史；PCG 路径冷启动 p0=0，不需要压力 |
+| 主循环 | 四段抽到 `src/Step.cpp` | `fpd` 与 `fpd_calib` 共用，标定测到的就是生产路径 |
 | 配置防御 | 只保留必填、语法、未知键、名称检查 | 个人使用、输入可信；不做范围/组合检查与预测警告 |
 | 统计 | 分块平均，找不到平台拒绝背书；采样间隔按物理时间 | 相关样本当独立会低估误差约 7.5 倍；固定步数采样会随 dt 变相关 |
 | 判据形态 | W3 用离散闭式；W5b 用差分 | 连续抛物线带 O(1/Nz²) 假偏差；小盒量测机器自带系统偏差 |
@@ -140,27 +140,47 @@ W5'a（FDT 矩阵恒等式，随 `adv_on/noise_skip` 删除）、粒子速度涨
 src/              生产代码（fpd_core + fpd）
   main.cpp        配置解析、run_production 主循环、越界/NaN 检查、每步 PCG 收敛检查、检查点
   Config.cpp      字段表（解析/--set/dump 共用）、必填与势参数检查、POD 工厂
-  Stokes.cpp      噪声、Π 三 kernel、v*、泊松右端、PCG/分裂法投影、真残差
-  Poisson.cpp     常系数 2D FFT + Thomas；变系数算子（apply_laplacian_affine）+ PCG（可选 PcgTrace）
+  Stokes.cpp      噪声、Π 三 kernel、v*、泊松右端、投影、真残差
+  Step.cpp        主循环四段（forces / fields / fluid / particles），fpd 与 fpd_calib 共用
+  Poisson.cpp     常系数 2D FFT + Thomas；变系数算子 + PCG（可选 PcgTrace）
   Viscosity.cpp   η 场与 S_i^x/y/z；Mass.cpp 面心 1/ρ 与重力体力
   Force.cpp       F → f 面心投影；Velocity.cpp v → V 与位置更新
   Potential.cpp   势参数派生量、GPU/CPU 两份力装配
   State.cpp       FpdState：主机存储、设备映射、FFT plan、Philox
-  IOBin.cpp       .fpd v4 读写（读 v3）、FNV-1a
+  IOBin.cpp       .fpd v3 读写、FNV-1a
   include/        Common.h(POD/IDX/工厂) Stencil.h Wall.h Potential.h Check.h 及各模块头文件
-tests/            fpd_check（Check*.cpp + Analysis.cpp）、fpd_tool（tool_main.cpp + Analysis.cpp）
+tests/            fpd_check（Check*.cpp + Analysis.cpp + PcgCalib.cpp）、fpd_tool（tool_main.cpp + Analysis.cpp）、
+                  fpd_calib（calib_main.cpp + PcgCalib.cpp）
   Analysis.*      常量表、亚格点扫描、分块平均（fpd_check 与 --sed-stats 共用）
   spike/          一次性风险验证（RNG offset、模板 routine、FFT 批量、三对角、状态映射、势黄金表等）
 tools/            fpd_format.py(格式镜像) make_init.py(初态) fpd_config.py(读配置数值)
                   fpd2vtk.py verify_vtk.py(pvpython)
 config/           smoke / production / sed / lattice512
-baseline/         各阶段日志；当前判据基线 mass_20261017/、pcg_precision_20261019.log、pcg_tol_20261019/
-doc/              推导笔记与参考文献（用户维护），old_code/ 仅供参考
+baseline/         各阶段日志；当前判据基线 mass_20261017/、pcg_precision_20261019.log、pcg_tol_20261019/、pcg_calib_20261019/
+doc/              推导笔记与参考文献（用户维护），pressure_split_failed.md（失败尝试记录），old_code/ 仅供参考
 ```
 
 ---
 
 ## 历史记录（倒序）
+
+### 2026-10-19 `fpd_calib` 容差标定程序；压力分裂法与 `.fpd` v4 移出主路径
+
+用户决定：容差由独立程序在跑主代码前标定并手动写入配置；分裂法作为失败的尝试移出主路径。
+
+- **移除**：`pressure_solver` 键、`NS_Config.split`、`FpdState.p_prev`、`step_navier_stokes` 的分裂分支、
+  `apply_laplacian_affine`、V6、W5c/`--pcg-noise` 的分裂行；`.fpd` 回退 v3（v4 只为分裂法存压力历史）。
+  记录写入 `doc/pressure_split_failed.md`（方法、代码、数据、失败原因、恢复方法）。
+  PCG 路径 50 步检查点与移除前逐位相同，判据日志与 `mass_20261017` 逐字节相同。
+- **`src/Step.cpp`**：主循环四段抽成共用函数，`main.cpp` 与 `fpd_calib` 共用；改动前后检查点逐位相同。
+- **`fpd_calib`**（`tests/calib_main.cpp` + `tests/PcgCalib.cpp`）：读真实配置与状态，推进生产轨迹，
+  在测量点上对 1e-2…1e-12 每半量级一档按生产判停求解，量 ε_V（残差导致的粒子速度误差 / 同一步
+  热噪声导致的粒子速度增量）与 ε_E，推荐 τ*/margin（默认 10）。`--pcg-noise` 改为调用同一核心，
+  PN1 与旧实现数值一致。
+- **实测**：`sed.cfg` 在 kT = 0.01/0.25/1 下 τ* 都是 1e-4（rms|ΔV_noise| 严格 ∝ √kT，噪声占比不变），
+  证实 τ* 与 kT 无关；kT=0.01 且重力 10 倍仍为 1e-4（预热 200 步时沉降流尚未发展，生产标定应用
+  运行中的检查点）。`lattice512.cfg`（512×512×64，N=7803）τ* = 1e-4，耗时 3.5 min、内存 6.8 GB。
+  推荐值（余量 10）均为 1e-5。
 
 ### 2026-10-19 变密度压力求解的精度验收
 
@@ -189,7 +209,8 @@ CG 界 `2q^k`、`q = (√κ-1)/(√κ+1)`，`ratio_rho=2` 时到 1e-12 约 16 �
   外推 `2pⁿ-pⁿ⁻¹` 误差与压力本身同量级，且误差项 `(a-a₀)∇(p̂-p)` 只在粒子内部非零。无噪声时（E2）
   ΔR 2.4e-8，可用。为逐位重启新增 `.fpd` v4（flags bit0 存 p、p_prev），PCG 路径载荷与 v3 逐字节相同。
 
-**结论**：PCG 保留为默认；有噪声的生产算例推荐 `pcg_tol = 1e-6`（门槛最松档 1e-4 的 100 倍余量），
+**结论**（当时；之后分裂法与 v4 已移出主路径、容差改由 `fpd_calib` 标定，见上一条）：
+PCG 保留为默认；有噪声的生产算例推荐 `pcg_tol = 1e-6`（门槛最松档 1e-4 的 100 倍余量），
 默认值是否改由用户决定。日志 `baseline/pcg_tol_20261019/`。需用户核对的 doc 章节：
 `doc/fourier-projection.md` §6（PCG、ā 缩放的作用、判据）、`doc/PressurePoisson.md` §16。
 

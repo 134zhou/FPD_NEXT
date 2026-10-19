@@ -37,6 +37,8 @@ export ACC_DEVICE_TYPE=nvidia
 ./build/fpd_check --check-mass
 ./build/fpd_check --debug-pcg
 ./build/fpd_check --pcg-noise
+cmake --build build --target fpd_calib -j
+./build/fpd_calib config/sed.cfg [--state ckpt.fpd --warm 0]
 ./build/fpd_check --check-density-fdt          # 约 20 分钟
 ./build/fpd_check --lambda 32 2.0
 ./build/fpd_tool --dump-ckpt out/run_0000200.fpd
@@ -95,13 +97,13 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
   变换归一化为 Nx*Ny；(0,0) 奇异列先减均值做相容投影，再用 d_0 -= 1 定规，不能清空整列。
   `ratio_rho != 1` 时是变系数 div(a grad p)：`apply_laplacian_var` + `solve_pressure_var`
   （PCG，预条件器 -a_bar·M，p0=0，tol = 配置键 pcg_tol（默认 1e-12），上限 PCG_MAX_ITER=200）。
-  不要加 warm start（会破坏逐位重启）。apply_laplacian_affine 是 PCG 算子与分裂法右端的同一份离散。
+  不要加 warm start（会破坏逐位重启）。
   主循环每步按主机侧 diag[1] <= pcg_tol 判断收敛；diag[2] 是投影后的真残差。
-- 压力分裂法（pressure_solver=split）只在 density_on 时生效：p̂ = 2pⁿ-pⁿ⁻¹，ρ0 = min(1, ratio_rho)，
-  前 2 步 PCG 建立历史；压力历史经 .fpd v4 flags bit0 入档。有热噪声时它不满足 --pcg-noise 的门槛，
-  不是默认路径。
-- 放松 pcg_tol 的依据是 --pcg-noise（求解误差 / 同一步噪声增量 ≤ 1e-3）与 W5c；
-  改求解器或预条件器后必须重跑这两项，不能只看 V3/V5 的残差。
+- 主循环的四段（step_forces / step_fields / step_fluid / step_particles）只在 src/Step.cpp 实现，
+  fpd 与 fpd_calib 共用；改一步的物理顺序只改这里。
+- pcg_tol 由用户在跑 fpd 前用 fpd_calib 标定（ε_V、ε_E：残差导致的粒子速度误差 / 同一步噪声增量 ≤ 1e-3）。
+  改求解器或预条件器后必须重跑 --pcg-noise 与 --check-density-fdt，不能只看 V3/V5 的残差。
+- 压力分裂法已试过并移出主路径（doc/pressure_split_failed.md），不要重新接回默认路径。
 - 速度/噪声边界属于 Wall.h；粒子壁面力属于 Potential.h，二者分开维护。
   壁面力使用表面间隙 h，要求 h>0；不对负间隙 clamp，保留运行中越界中止。
 - 壁面剪切噪声幅度 ×√2 只作用于两壁的 EDGE_YZ/EDGE_ZX；`noise_gamma1` 仅供 W5b 对照。
@@ -119,7 +121,8 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
 |---|---|
 | Stencil、Viscosity、Force、Velocity、Potential.h | --check；相场加权须覆盖 N=2 重叠均匀流 |
 | Poisson.cpp（常系数） | --check-tridiag、--check-poisson 的 P5/P6；提示用户核对 PressurePoisson.md §12 |
-| Poisson.cpp（变系数/PCG）、Stokes.cpp 分裂法 | --check-poisson 的 V0–V6，--debug-pcg，--pcg-noise，--check-density-fdt；提示核对 §16 |
+| Poisson.cpp（变系数/PCG） | --check-poisson 的 V0–V5，--debug-pcg，--pcg-noise，--check-density-fdt；提示核对 §16 |
+| Step.cpp、main.cpp 主循环 | 合法输入检查点与改动前逐位对照、单粒子重启；--pcg-noise（fpd_calib 共用 Step） |
 | Wall.h、Stokes.cpp、Viscosity.cpp | --check-wall；Stokes.cpp 另跑 --check-poisson 的 V0；提示核对 §14 |
 | Potential.h/.cpp、Wall.h、main.cpp 越界逻辑 | --check-wall，含 W8；--check-potential |
 | Mass.cpp、ratio_rho、重力语义 | --check-mass（MA1–MA7）+ --check-wall（W8） |
@@ -128,7 +131,7 @@ GPU 验证设置 `ACC_DEVICE_TYPE=nvidia`，不能把 CPU 回退结果当作 GPU
 | 二进制 IO 任一侧 | 下述 C++/Python 互操作检查 |
 
 当前全部判据的实测值见 README「数值判据」，归档在 `baseline/mass_20261017/` 与
-`baseline/pcg_precision_20261019.log`、`baseline/pcg_tol_20261019/`。
+`baseline/pcg_precision_20261019.log`、`baseline/pcg_tol_20261019/`、`baseline/pcg_calib_20261019/`。
 --check-wall 覆盖 W1–W4、W3b、W4s、W6、W8a–e、W5b；变密度路径的噪声/FDT 由 --check-density-fdt（W5c）负责；
 W8e 是近壁 GPU/CPU 力装配对照（重力不在装配里，F_g 是给定值）。
 关闭壁面势时的判据锚是 W8a/W8c 逐位为零。
@@ -138,10 +141,9 @@ W8e 是近壁 GPU/CPU 力装配对照（重力不在装配里，F_g 是给定值
 
 C++ 只读写 .fpd；init_file 必填，同一文件格式用于初态和重启，文件 step 决定起点。
 n_steps 是绝对目标步数。网格尺寸、N、step 来自文件，其余参数来自配置；逐位重启须保持同一配置和 seed。
-格式由 src/include/IOBin.h 与 tools/fpd_format.py 共同定义；写 v4，读 v3/v4，v2 明确拒绝。
-数据区是 vx/vy/vz 与 12 个粒子数组，仅分裂法追加 p、p_prev（flags bit0）；
-文件大小必须等于 CkptHeader::file_bytes()（--dump-ckpt 校验）。Python 侧只写 flags=0 的文件。
-p 是求解器内部状态：FpdState::download 不回传；分裂法写检查点或测试需要时显式 `acc update self`。
+格式由 src/include/IOBin.h 与 tools/fpd_format.py 共同定义，当前版本为 3；其他版本明确拒绝。
+数据区只有 vx/vy/vz 与 12 个粒子数组，文件大小恒为 48+24*size+96*N（--dump-ckpt 校验）。
+p 是求解器内部状态：不入档、FpdState::download 不回传；测试需要时显式 `acc update self`。
 .config.used 不含尺寸键，离线工具用 --config 读取物理量。
 numpy 形状必须为 (Nz, Ny, Nx)；版本、字段顺序与 FNV-1a 两侧同步。
 
