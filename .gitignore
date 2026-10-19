@@ -27,11 +27,4 @@ vis/
 # Python 缓存
 __pycache__/
 *.pyc
-doc/Stokes_line_by_line.md
-doc/ns-equation.md
-doc/fourier-projection.md
-doc/ns-equation.md
-doc/ns-equation.md
-doc/ns-equation.md
-doc/fourier-projection.md
-doc/discretization.md
+
