@@ -6,7 +6,7 @@
 //   fpd_check --check-tridiag
 //   fpd_check --check-poisson [Nx Ny Nz]
 //   fpd_check --check-wall [Nx Ny Nz]
-//   fpd_check --check-density-fdt [tol ...]
+//   fpd_check --check-density-fdt [tol ...] [split]
 //   fpd_check --debug-pcg [Nx Ny Nz]
 //   fpd_check --pcg-noise [Nx Ny Nz]
 //   fpd_check --check-mass [Nx Ny Nz]
@@ -106,9 +106,14 @@ int main(int argc, char** argv)
     if (argc > 1 && std::strcmp(argv[1], "--check-density-fdt") == 0)
     {
         std::vector<double> tols;
-        for (int i = 2; i < argc; i++) { tols.push_back(std::atof(argv[i])); }
+        bool with_split = false;
+        for (int i = 2; i < argc; i++)
+        {
+            if (std::strcmp(argv[i], "split") == 0) { with_split = true; }
+            else { tols.push_back(std::atof(argv[i])); }
+        }
         if (tols.empty()) { tols = {1e-8, 1e-6, 1e-4, 1e-3}; }
-        return run_check_density_fdt(tols);
+        return run_check_density_fdt(tols, with_split);
     }
 
     // 质量密度场判据：需 GPU
@@ -140,7 +145,7 @@ int main(int argc, char** argv)
               << "      fpd_check --check-tridiag\n"
               << "      fpd_check --check-poisson [Nx Ny Nz]\n"
               << "      fpd_check --check-wall [Nx Ny Nz]\n"
-              << "      fpd_check --check-density-fdt [tol ...]\n"
+              << "      fpd_check --check-density-fdt [tol ...] [split]\n"
               << "      fpd_check --debug-pcg [Nx Ny Nz]\n"
               << "      fpd_check --pcg-noise [Nx Ny Nz]\n"
               << "      fpd_check --check-mass [Nx Ny Nz]\n"

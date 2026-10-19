@@ -567,11 +567,13 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
                              bool gamma1, long n_steps, unsigned long long seed,
                              bool verbose = true,
                              const std::vector<double>* a3 = 0, double pcg_tol = 1e-12,
-                             std::vector<double>* series_out = 0)
+                             std::vector<double>* series_out = 0, bool split = false)
 {
     NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, /*noise_on=*/true);
     cfg.noise_gamma1 = gamma1 ? 1 : 0;
     if (a3) { cfg.density_on = 1; cfg.pcg_tol = pcg_tol; }
+    // 分裂法：ρ0 = min ρ；调用方给的 a 场满足 a <= 1，所以 ρ0 = 1
+    if (a3 && split) { cfg.split = 1; cfg.split_rho0 = 1.0; }
 
     FpdState st;
     st.init(cfg, 0, ST_FULL, seed);
@@ -612,7 +614,8 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
         update_force_field(cfg, pp, 0, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz,
                            st.sum_phix, st.sum_phiy, st.sum_phiz,
                            0.0, 0.0, 0.0, st.fx, st.fy, st.fz);
-        step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.p_prev, 0,
+        step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.p_prev,
+                           (cfg.split && step >= 2) ? 1 : 0,
                            st.fx, st.fy, st.fz,
                            st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
                            st.cg_r, st.cg_s, st.cg_zq,
@@ -659,7 +662,7 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
     const BlockStat pk = pick_plateau(bs, ns, 20);
 
     const double target = kT * dim;
-    const char* lbl = a3 ? "变密度" : (gamma1 ? "壁面 γ≡1" : "壁面 γ=2");
+    const char* lbl = a3 ? (split ? "变密度分裂" : "变密度") : (gamma1 ? "壁面 γ≡1" : "壁面 γ=2");
     if (pk.block_len < 0)
     {
         std::printf("      %-10s 未找到分块平台（误差棒不可信）→ 按设计拒绝背书 FAIL\n", lbl);
@@ -1069,7 +1072,7 @@ int run_check_wall(int Nx, int Ny, int Nz)
 // 噪声的共同部分抵消，差值的误差棒远小于单独一次的误差棒。
 // 判据：参考比值与 1 的偏离和 W5b 同量级（< 3%）；各容差与参考之差在统计上不超过 1e-3。
 // ============================================================================
-int run_check_density_fdt(const std::vector<double>& tols)
+int run_check_density_fdt(const std::vector<double>& tols, bool with_split)
 {
     g_fail = 0;
     const int Nx = 4, Ny = 4, Nz = 4;
@@ -1129,6 +1132,24 @@ int run_check_density_fdt(const std::vector<double>& tols)
         char msg[96];
         std::snprintf(msg, sizeof(msg), "W5c pcg_tol=%.0e 与参考之差统计上 <= 1e-3", tol);
         check(std::fabs(pk.mean) - 2.0 * pk.stderr_mean < 1e-3, msg);
+    }
+
+    // 压力分裂法：同 seed 成对比较，并报告绝对比值（它不是 ρ 加权正交投影，FDT 不受保证）。
+    // 只报告、不判：分裂法是否合格由 --pcg-noise 与端到端对照共同决定。
+    if (with_split)
+    {
+        std::vector<double> ser;
+        w5_wall_equipart(Nx, Ny, Nz, dt, kT, false, n_steps, 1ULL, true, &a3, 1e-12, &ser, true);
+        const double r_split = last_ratio, s_split = last_sigma;
+        const int n = (int)std::min(ser.size(), ref.size());
+        std::vector<double> d(n);
+        for (int t = 0; t < n; t++) { d[t] = (ser[t] - ref[t]) / (kT * dim); }
+        BlockStat bs[64];
+        const int ns = blocking_analysis(d.data(), n, bs, 64);
+        const BlockStat pk = pick_plateau(bs, ns, 20);
+        std::printf("      分裂法     比值 %.4f ± %.4f   与参考成对差 %+.3e ± %.3e%s\n",
+                    r_split, s_split, pk.mean, pk.stderr_mean,
+                    pk.block_len < 0 ? "（无平台）" : "");
     }
 
     std::printf("\n%s\n", g_fail == 0 ? "全部通过" : "有失败项");

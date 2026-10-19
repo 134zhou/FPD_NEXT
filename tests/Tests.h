@@ -51,8 +51,8 @@ int run_pcg_noise(int Nx, int Ny, int Nz);
 int run_check_wall(int Nx, int Ny, int Nz);
 
 // 变密度能量均分 W5c + PCG 容差的同 seed 成对比较（需 GPU，每个容差约数分钟）。
-// tols 为空时用 {1e-8, 1e-6, 1e-4, 1e-3}。
-int run_check_density_fdt(const std::vector<double>& tols);
+// tols 为空时用 {1e-8, 1e-6, 1e-4, 1e-3}；参数 split 另跑压力分裂法（只报告）。
+int run_check_density_fdt(const std::vector<double>& tols, bool with_split);
 
 // 质量密度场判据（需 GPU）：
 //   MA1 面心 1/rho 与独立 CPU 暴力枚举逐点对照

@@ -57,7 +57,7 @@
 
 ```
 compute_particle_forces      F = 粒子对势 + 壁面势（重力不在这里）
-[写检查点 / 打日志]           按 interval_ckpt / interval_log，含越界、NaN、PCG 残差检查
+[写检查点 / 打日志]           按 interval_ckpt / interval_log，含越界、NaN 检查
 update_viscosity_fields      η（体心）、η_XY/YZ/ZX（棱心）、S_i^x/y/z
 update_mass_fields           面心 a = 1/ρ（仅 ratio_rho ≠ 1）
 update_force_field           f ← F（面心）
@@ -65,6 +65,7 @@ apply_gravity                f += (1/a - 1)·g（仅 ratio_rho ≠ 1 且 g ≠ 0
 step_navier_stokes           噪声 → Π → v* → b = ∇·v*/dt → 解压力 → 投影
 update_particle_velocity     V ← v
 update_particle_position     R += dt·V（x/y 回绕；z 不折叠；Ru 为不折叠坐标）
+[PCG 收敛检查]                每步读主机侧 diag[1]，未收敛则写出 step+1 并中止（rc=3）
 ```
 
 `step_navier_stokes`（`src/Stokes.cpp`）的显式步与投影：
@@ -106,11 +107,20 @@ ratio_rho ≠ 1:   v* = v + dt·[ -∇·(vv) + a·(-∇·(Π - vv) + f) ]      a
   在 z 向解三对角（Thomas，前推系数 `tri_w` 预算一次）。算子是修正步所用梯度与散度的
   **精确复合** `div∘grad`；z 向 Neumann 由「壁面法向面不修正」导出。`(0,0)` 奇异列先做相容投影
   （减均值，`|Σb̂|` 记入 `diag[0]`），再以 `d_0 -= 1` 定规，不能整列清零。逆变换归一化为 `Nx*Ny`。
-- **变系数**（`ratio_rho ≠ 1`）：`apply_laplacian_var` 给出同构离散的 `div(a∇p)`；
-  `solve_pressure_var` 用 PCG 求解，预条件器 `B = -ā·M`（M 即上面的常系数求解器，ā 为参与算子的
-  面心 a 均值）。初值固定 `p0 = 0`（保证逐位重启，不做 warm start），容差相对残差 `1e-12`，
-  上限 200 次；`diag[1]` 记录最终相对残差，日志步若 > 1e-6 则落盘中止。
-  此路径的 `∇·v=0` 只到 PCG 容差（实测 `max|div v|/max|v| ~ 1e-11`），常系数路径为机器精度。
+- **变系数**（`ratio_rho ≠ 1`，默认 `pressure_solver = pcg`）：`apply_laplacian_var` 给出同构离散的
+  `div(a∇p)`；`solve_pressure_var` 用 PCG 求解，预条件器为常系数求解器 M（乘 1/ā，标量缩放不改变
+  迭代序列）。初值固定 `p0 = 0`（保证逐位重启，不做 warm start），相对残差容差 `pcg_tol`
+  （默认 `1e-12`），上限 200 次。`diag[1]` 是递推残差，`diag[2]` 是投影后从速度场直接量的真残差
+  `‖div vⁿ⁺¹‖/‖div v*‖`；此路径的 `∇·v=0` 只到容差，常系数路径为机器精度。
+- **PCG 为什么已接近最优**：对任意 x，`xᵀAx = Σ_f a_f(∇x)_f²`，所以预条件后的条件数
+  `κ ≤ ρ_max/ρ_min`，**与网格尺寸和粒子数无关**。CG 误差界 `2q^k`、`q=(√κ-1)/(√κ+1)`：
+  `ratio_rho=2` 时每次迭代缩小约 0.17 倍，到 1e-12 约 16 次——32³ 到 512×512×128 实测都是 16 次。
+  多重网格同样是 O(1) 次迭代，每次不比一次 FFT 便宜；只有 `ratio_rho` 很大（κ≳10）时才值得考虑。
+  所以真正的杠杆是**容差**，见下面「压力求解精度」。
+- **压力分裂法**（`pressure_solver = split`，可选）：Dodd & Ferrante (2014) 的外推法，
+  `∇²pⁿ⁺¹ = ρ₀b + ∇·[(1-ρ₀a)∇p̂]`、`vⁿ⁺¹ = v* - dt[a₀∇pⁿ⁺¹ + (a-a₀)∇p̂]`，`p̂ = 2pⁿ-pⁿ⁻¹`，
+  `ρ₀ = min ρ`。每步一次常系数直解，`∇·v=0` 到机器精度，前 2 步用 PCG 建立压力历史。
+  **有热噪声时不推荐**：压力在相邻步之间几乎不相关，外推误差集中在粒子内部（见「压力求解精度」）。
 
 ## 粒子、势与壁面
 
@@ -158,6 +168,7 @@ GPU 验证须设 `ACC_DEVICE_TYPE=nvidia`。
 |---|---|
 | 必填 | `init_file`、`dt`、`n_steps`（**绝对**目标步数）、`kT`、`radius`、`xi`、`ratio_eta`、`ratio_rho` |
 | 可选物理 | `gravity_x/y/z`（加速度，默认 0）、`noise_on`（默认 1） |
+| 压力求解 | `pressure_solver`（`pcg`/`split`，默认 pcg）、`pcg_tol`（默认 1e-12；有噪声时推荐 1e-6） |
 | 粒子间势 | `potential`、`pot_eps/sigma/De/alpha/r_eq/rcut/shift` |
 | 壁面势 | `wallpotential`、`wall_eps/sigma/De/alpha/r_eq/rcut/shift` |
 | IO | `out_dir`（out）、`run_name`（run）、`interval_ckpt`、`interval_log`（各 10000）、`seed`（1234） |
@@ -166,7 +177,7 @@ GPU 验证须设 `ACC_DEVICE_TYPE=nvidia`。
 lj126 要 `eps, sigma, rcut`（壁面势同理，前缀 `wall_`）。`Nx/Ny/Nz` 只来自 `init_file` 头部，
 在配置或 `--set` 中出现即报错。
 
-配置层只检查语法、数值转换、未知键、必填项和势/移位名称；参数范围、时间步稳定性、模板盒与截断
+配置层只检查语法、数值转换、未知键、必填项和势/移位/压力求解器名称；参数范围、时间步稳定性、模板盒与截断
 限制由使用者保证（显式粘性项大致要求 `dt ≲ min(ρ)/(6η_c)`，`ratio_rho < 1` 须相应减小 dt）。
 每次运行写出 `<out_dir>/<run_name>.config.used`：全部字段（不含尺寸键）+ 以 `#` 注释的派生量，
 可直接作为输入重跑。
@@ -183,13 +194,17 @@ lj126 要 `eps, sigma, rcut`（壁面势同理，前缀 `wall_`）。`Nx/Ny/Nz` 
 C++ 只读写二进制 `.fpd`；初态、检查点、续跑文件是同一格式，文件里的 `step` 决定起点。
 
 ```
-magic "FPDCKPT\0" | endian 0x01020304 | version=3 | Nx Ny Nz N (int32) | step (int64)
+magic "FPDCKPT\0" | endian 0x01020304 | version=4 | flags (uint32) | Nx Ny Nz N (int32) | step (int64)
 vx vy vz [size]  |  Rx Ry Rz Rux Ruy Ruz Vx Vy Vz Fx Fy Fz [N]   （f64，IDX 顺序连续）
+[p p_prev [size]]                                                 （仅 flags bit0）
 checksum (FNV-1a，覆盖此前全部字节)
 ```
 
-- 文件大小恒为 `48 + 24*size + 96*N` 字节，`fpd_tool --dump-ckpt` 校验这一点。
-  压力、粘度、密度、`S_i`、力密度、RNG 状态和物理参数都不入档；v2 及更早版本明确拒绝。
+- 写端写 v4，读端接受 v3（无 flags）与 v4；v2 及更早版本明确拒绝。
+- 压力只在 `pressure_solver = split` 且历史完整时入档（flags bit0），用于逐位重启；PCG 路径冷启动
+  `p0 = 0`，不存压力。粘度、密度、`S_i`、力密度、RNG 状态和物理参数都不入档。
+- 文件大小恒为 v3 `48 + 24*size + 96*N`、v4 `52 + 24*size + 96*N [+16*size]` 字节，
+  `fpd_tool --dump-ckpt` 校验这一点。
 - 格式由 `src/include/IOBin.h` 与 `tools/fpd_format.py` 共同定义；numpy 形状为 `(Nz, Ny, Nx)`。
 - 载入后检查上壁 `vz[:,:,Nz-1]` 逐位为 0（否则泊松相容性失效），不满足即拒绝。
 - 检查点路径 `<out_dir>/<run_name>_<step 补零 7 位>.fpd`；终态在 `n_steps` 写出，文件里的 F 与 R 对应。
@@ -229,12 +244,12 @@ $PV/bin/pvpython tools/fpd2vtk.py out/sed_[0-9]*.fpd --config config/sed.cfg -o 
 ### 逐位重启
 
 同一配置、同一 seed 下，从检查点续跑与一口气跑完**逐位相同**（N=1/N=2 不重叠、常系数与
-`ratio_rho=2` 两条路径均实测）。依据：
+`ratio_rho=2` 的 PCG 与分裂法三条路径均实测）。依据：
 
 - cuRAND Philox 每步显式定位：`base = step·(slotD+slotN)`，`randD` 从 `base`、`randN` 从
   `base+slotD` 生成，`slotD = 3·size`、`slotN = 3·Nx·Ny·(Nz+1)`（均向上取偶）。不需要恢复 RNG 状态。
   （实测只有 Philox 的 offset 有意义，且「生成 n 个数前进 n」的累计模型不成立。）
-- 密度场、粘度场由 R 确定性重算；PCG 固定 `p0=0`。
+- 密度场、粘度场由 R 确定性重算；PCG 固定 `p0=0`；分裂法的压力历史在 v4 检查点里。
 
 粒子支撑域重叠（间距 < 2·range）时，网格 atomic 累加顺序不确定，跨进程会有 ~1e-16 差异，
 逐位重启不再成立；有粒子间力的致密体系通常处于这种情况。
@@ -247,15 +262,17 @@ export ACC_DEVICE_TYPE=nvidia
 ./build/fpd_check --check-config       # 配置解析、必填、覆盖顺序、归档往返（CPU）
 ./build/fpd_check --check-potential    # J1–J6 势函数（CPU）
 ./build/fpd_check --check-tridiag      # Thomas vs 稠密 Gauss、奇异列定规（CPU）
-./build/fpd_check --check-poisson      # P5/P6 常系数往返、V0–V5 变系数投影
+./build/fpd_check --check-poisson      # P5/P6 常系数往返、V0–V5 变系数投影、V6 分裂法
 ./build/fpd_check --check-wall         # W1–W4、W3b、W4s、W6、W8a–e、W5b（约数分钟）
 ./build/fpd_check --check-mass         # MA1–MA7 质量场与重力
 ./build/fpd_check --debug-pcg [Nx Ny Nz]   # PCG 到双精度地板的迭代数（调试，不改生产容差）
+./build/fpd_check --pcg-noise [Nx Ny Nz]   # PCG 误差 vs 同一步热噪声增量（PN1），含分裂法一行
+./build/fpd_check --check-density-fdt [tol ...] [split]   # W5c 变密度能量均分 + 容差成对比较（约 4 分钟/档）
 ./build/fpd_check --lambda [L] [ratio_rho] # 相场离散常量表（CPU）
 ```
 
-当前实测（日志 `baseline/mass_20261017/*.log`、`baseline/pcg_precision_20261019.log`；
-2026-10-19 重新构建复跑，输出与归档逐字节相同）：
+当前实测（日志 `baseline/mass_20261017/*.log`、`baseline/pcg_precision_20261019.log`、
+`baseline/pcg_tol_20261019/`）：
 
 | 判据 | 内容 | 实测 |
 |---|---|---|
@@ -267,6 +284,7 @@ export ACC_DEVICE_TYPE=nvidia
 | V0 | 均匀 a=0.5 vs 1.0、η=f=0：`v*` 与 a 无关 | 逐位 0 |
 | V1–V3 | `L·1=0` / 对称性 / 变系数往返（16³，三种 a 场） | 逐位 / ≤ 1.3e-15 / ≤ 1.2e-11 |
 | V4/V5 | 一步投影后 div v 相对最大速度 / PCG 迭代与残差 | ≤ 8.1e-12 / 14–18 次、≤ 3.2e-13 |
+| V6 | 分裂法一步后 div v / a≡1 时与 PCG 之差 | 1.3e-15 / 3.5e-16 |
 | W1/W2 | 壁面 `div v`（含两壁层）/ 上壁 `vz` | 3.4e-16 / 逐位 0 |
 | W3 | 平面 Poiseuille 与**离散**闭式 `vx[k]=(g/2η)[(Nz²+1)/4-(k-(Nz-1)/2)²]` | 0 |
 | W3b | 两片壁面 `Π_yz/Π_zx` 与独立 CPU 展开式 | 4.4e-17 |
@@ -277,6 +295,8 @@ export ACC_DEVICE_TYPE=nvidia
 | MA1–MA7 | 面心 a vs 暴力枚举、望远镜求和、重力总和、N=0/等密度恒等、壁面力平衡 | ≤ 3.3e-16、≤ 3.9e-15、≤ 7.4e-15、逐位、6.3e-14 |
 | J1–J6 | 力=-dU/dr、Python 黄金表、最小镜像、N=3 三角形、特征点 | ≤ 1.1e-11、≤ 8.2e-16、通过 |
 | P0 | `--debug-pcg`：a≡1 时 PCG 1 步到 <1e-15；粒子场 15 步到 1e-12、19 步到 1e-15 | 地板 ~4e-16 |
+| PN1 | `--pcg-noise`：默认容差下求解误差 / 同一步热噪声增量（ρ 加权能量 ε_E、粒子速度 ε_V） | 7e-13 / 4e-12 |
+| W5c | 4³ 壁面盒、ρ∈[1,2]：`<Σρv²>/(kT·dim)`；pcg_tol 1e-8…1e-3 与 1e-12 同 seed 成对差 | 1.0047±0.0035；≤ 4e-9 |
 
 判据设计要点：
 
@@ -297,6 +317,39 @@ export ACC_DEVICE_TYPE=nvidia
 （`+8πaξ²π²/24`），不是格点误差。凡涉及粒子体积的量（重力换算、体积分数）必须用与模拟相同的
 离散求和。`--lambda` 另外打印的 λ^T、M_i、M_eq、M_eff 只是 ∫φ、∫φ² 的组合，代码不使用。
 
+## 压力求解精度：误差要比热噪声小多少
+
+投影后的速度误差有精确表达式 `δv = -dt·a·∇e`（e 为压力误差），其 ρ 加权能量
+`Σρ|δv|² = dt²·eᵀAe`；下一步右端会把残留的 `div v` 重新投影掉，所以误差**不累积**。
+合适的对照尺度是**同一步注入的噪声速度增量**（而非平衡态热速度，后者大 5 倍以上，会把容差放得过松）。
+判据门槛取 1e-3：`ε_E = sqrt(Σρ|δv|²/Σρ|PΔv*|²)` 与 `ε_V = max|δV_i|/rms|ΔV_i|` 都 ≤ 1e-3。
+
+32³、N=4、`ratio_rho=2`、kT=0.25、dt=0.002（`--pcg-noise`；右端 `b` 几乎 100% 是噪声）：
+
+| pcg_tol | 迭代 | ε_E | ε_V | 结论 |
+|---|---|---|---|---|
+| 1e-3 | 4 | 9.0e-4 | 7.9e-3 | 不满足（粒子速度） |
+| 1e-4 | 6 | 2.7e-5 | 2.5e-4 | 满足 |
+| 1e-6 | 8 | 8.0e-7 | 7.6e-6 | 满足 |
+| 1e-12 | 16 | 7.2e-13 | 4.0e-12 | 满足 |
+| 分裂法 | 0 | 9.3e-2 | 1.8 | 不满足 |
+
+经验关系：`ε_E ≈ 1.2×` 相对残差，`ε_V ≈ 10×` 相对残差（粒子速度的噪声增量被相场平均压低，
+分母小）。分裂法的误差项 `(a-a₀)∇(p̂-p)` 在 ρ=ρ₀ 的流体里为零，只在粒子内部出现。
+端到端（`sed.cfg`，5000 步，同 seed，以 1e-14 为参考；不同 seed 的差为 max|ΔR| = 0.41）：
+
+| 方案 | 粒子位置最大偏差 ΔR | 步/秒 |
+|---|---|---|
+| pcg_tol 1e-10 / 1e-8 / 1e-6 | 3.6e-13 / 3.6e-11 / 3.1e-8 | 38.6 / 44.7 / 53.3 |
+| pcg_tol 1e-4 / 1e-3 | 1.8e-7 / 7.5e-6 | 61.1 / 71.5 |
+| 分裂法 | 8.3e-3（`<Vz>` 偏 0.55%） | 99.2 |
+| 默认 1e-12 | — | 35.9 |
+
+W5c 显示各容差下温度与参考的差 ≤ 4e-9；分裂法的温度偏 +1.9e-4（统计显著但小），但其单步误差在粒子
+速度上与噪声增量同量级，不满足 1e-3 门槛。**推荐：有噪声的生产算例用 `pcg_tol = 1e-6`**
+（满足门槛的最松档 1e-4 再收紧 100 倍，吞吐 +48%）；确定性算例（`noise_on=0`）的对照尺度不再是噪声，
+需要按所测量的精度要求保留紧容差（E2 单粒子在 1e-4 时 ΔR = 2.7e-11）。默认值仍为 1e-12。
+
 ## 性能
 
 RTX 3060，`ratio_rho ≠ 1` 时每步一次 PCG（约 16 次迭代，每次一对 2D FFT + Thomas）：
@@ -304,13 +357,14 @@ RTX 3060，`ratio_rho ≠ 1` 时每步一次 PCG（约 16 次迭代，每次一�
 | 算例 | ratio_rho | 步/秒 | 来源 |
 |---|---|---|---|
 | 128×64×32，N=95（`sed.cfg`） | 2.0 | **35.9**（PCG 16 次/步；20 万步 ≈ 1.5 h） | 2026-10-19 |
+| 同上，`pcg_tol=1e-6` | 2.0 | **53.3**（8 次/步；20 万步 ≈ 1 h） | 2026-10-19 |
 | 同上 | 1.0 | **134.8**（20 万步 ≈ 25 min） | 2026-10-19 |
 | 128×64×32，N=1 | 1.0 | 153 | Phase 2 |
 | 32³，N=1 | 1.0 / 2.0 | 1128 / ~100–200 | Phase 2 / 2026-10-17 |
 | 512×512×128，N=28611 | 2.0 | ~0.1（前 3 步） | 2026-10-17 |
 
-小盒子已接近 kernel 启动延迟主导（32³ 格点少 8 倍只快 7.4 倍）。性能优化未立项；
-降低 PCG 迭代数需要两级预条件或多重网格。
+小盒子已接近 kernel 启动延迟主导（32³ 格点少 8 倍只快 7.4 倍）。PCG 迭代数已与网格无关，
+进一步提速的空间在容差（见上节）与非压力部分（粒子模板盒散写、O(N²) 力）。
 
 ## 能说什么、不能说什么
 
@@ -328,9 +382,9 @@ RTX 3060，`ratio_rho ≠ 1` 时每步一次 PCG（约 16 次迭代，每次一�
 - **粒子侧 FDT（W7）未做**：周期专属的 3A/3B 能量均分判据已随 z 周期路径删除，壁面盒下的目标值需
   重新推导；现在只有流体侧 W5b。
 - **变密度近似**：`∇·v=0` 加上由 R 预设的 ρ 场，`∂_tρ + v·∇ρ` 的残差为 O(ξ/a)，与 FPD 界面近似同阶。
-- **PCG 成本**：变密度路径比常系数慢约 4–10 倍。
-- **PCG 收敛只在日志步检查**：`diag[1]` 只保留最近一步的残差，两次日志之间某一步未收敛
-  （`div v ≠ 0`）而后恢复的情况不会被发现；大网格配置的 `interval_log = 1000`。
+- **PCG 成本**：变密度路径默认容差下比常系数慢约 3.8 倍（`pcg_tol=1e-6` 时约 2.5 倍）。
+- **分裂法不保证 FDT**：它不是 ρ 加权的正交投影；W5c 的温度偏差 2e-4 很小，但粒子速度的单步误差
+  与噪声同量级，只适合无噪声或对粒子动力学精度要求低的场合。
 - **重叠支撑域**：`η`、`a` 的 atomic 累加使逐位重启只对不重叠构型成立；重叠区 `Σφ > 1`，
   η 可超过 η_c（N=2 间距 4 时 η_max = 90.5），文献按字面求和、未 clamp。
 - `stencil_point` 的引用出参在 `-Minfo` 下报 local memory，目前不是瓶颈。
