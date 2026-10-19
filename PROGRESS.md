@@ -1,6 +1,6 @@
 # 进度记录
 
-最后更新：2026-10-19（fpd_calib 容差标定；压力分裂法与 .fpd v4 移出主路径）
+最后更新：2026-10-20（blog 修改清单；待用户处理事项汇总）
 
 ## 当前状态
 
@@ -76,6 +76,25 @@ W5'a（FDT 矩阵恒等式，随 `adv_on/noise_skip` 删除）、粒子速度涨
     `a/L_z = 0.1` 时壁面与镜像偏差 10% 量级。
 12. `-Minfo` 报 `stencil_point` 引用出参用 local memory；目前不是瓶颈。
 13. 截断半径 `range = ⌊2(a+ξ)⌋ = 8`，旧代码用 7，`∫φ` 差约 0.3%；不追求与旧结果一致。
+
+## 待用户处理（2026-10-20 汇总）
+
+代码侧的工作都已提交（HEAD `0b91b9b` 及之前），以下事项等用户决定或手动处理：
+
+1. **blog 核对**：`doc/` 下推导笔记与代码的出入已逐条列在根目录 `tmp.md`
+   （不进 git，经 `.git/info/exclude` 排除）。重点：ns-equation §3.3 力投影/速度平均的分母写成了
+   Σ_i φ_i（即旧 C2 缺陷）、§1 把 `pi_*` 当成 Cauchy 应力、§5 守恒写法 warning 与第二篇矛盾；
+   λ^T/M_i/M_eff 相关内容建议删除；「ā 缩放降迭代数」说法错误；discretization §2.2 只令 z 分量散度
+   为 0、`p[K]` 笔误；PressurePoisson §16.1 噪声符号前后不一致；W5b、W3b、V0–V5、PCG 停止条件、
+   `conv_*`、行号等过时数值与接口。
+2. **`pcg_tol`**：默认仍为 1e-12。有噪声的变密度配置跑前先 `fpd_calib <配置> --state <检查点> --warm 0`，
+   把推荐值（已测算例均为 1e-5）手动写入配置；是否改默认值待定。
+3. **未入库的配置**（`config/512x512x128*.cfg`、`lattice512_2/3.cfg`、`mass_destribution.cfg`）：
+   - `512x512x128_2.cfg` 的 `init_file` 是第 600000 步检查点而 `n_steps = 600000`，启动即「无事可做」；
+   - `lattice512.cfg`、`lattice512_2.cfg`、`512x512x128.cfg` 的 `gravity_z = +0.58716` 指向 +z（沿用旧配置的正号），需确认是否有意；
+   - `gravity_z = -100` 已按新语义换算为 `-0.58716`；首行构型注释已改正。
+4. **`tools/make_init.py`** 的注释修正与用户自己未提交的数据块改动（512×512×128、51×51×11）混在一起，未提交。
+5. **`doc/` 下用户未提交的修改**（discretization / fourier-projection / ns-equation、`Stokes_line_by_line.md`）保持原样，未动。
 
 ## 下一步
 
@@ -163,6 +182,13 @@ doc/              推导笔记与参考文献（用户维护），pressure_split
 ---
 
 ## 历史记录（倒序）
+
+### 2026-10-20 blog 修改清单
+
+对照 HEAD `0b91b9b` 逐篇核对 `doc/` 下六篇推导笔记（ns-equation、fourier-projection、discretization、
+PressurePoisson、PoissonCodeWalkthrough、Stokes_line_by_line），把与代码矛盾、过时或建议补充的点
+汇总到根目录 `tmp.md`（全局 9 条 + 每篇一张表，标 [错]/[旧]/[补]，附位置、应改内容与依据）。
+`tmp.md` 不进 git；按 AGENTS.md 约定 `doc/` 由用户自行修改。本次无代码改动。
 
 ### 2026-10-19 `fpd_calib` 容差标定程序；压力分裂法与 `.fpd` v4 移出主路径
 
