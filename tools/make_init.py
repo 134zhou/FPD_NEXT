@@ -10,17 +10,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fpd_format as F
 
 
-# 初态数据：当前默认生成 config/sed.cfg 使用的沉降构型。
-NX, NY, NZ = 512, 512, 64
+# 初态数据：按目标算例直接改这里，没有固定的默认算例。
+# config/sed.cfg 的初态：NX, NY, NZ = 128, 64, 32；POINTS = None；OUT = "out/sed_init.fpd"。
+NX, NY, NZ = 512, 512, 128
 RADIUS, XI = 3.2, 1.0
 PHI = 0.05                    # 标称解析球体积分数
 SEED = 20260914
 MIN_SEP = 2.0 * RADIUS + XI
 WALL_MARGIN = 8.0
 VELOCITY_PATTERN = "zero"    # 互操作判据改为 "index"
-OUT = "init/sed_init.fpd"
+OUT = "init/sed_init512x512x128.fpd"
 #POINTS = None                 # None: 生成沉降构型；也可直接写 [] 或坐标列表
-POINTS = [(i*10, j*10, k*10+10) for i in range(51) for j in range(51) for k in range(3)]  # 直接写坐标列表
+POINTS = [(i*10, j*10, k*10+10) for i in range(51) for j in range(51) for k in range(11)]  # 直接写坐标列表
 
 def make_particles():
     if POINTS is not None:

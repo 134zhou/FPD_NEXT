@@ -9,7 +9,7 @@ output/
 *.vtk
 
 # 旧代码的初始构型文件（合计 1.6 GB，不入版本控制）
-doc/old_code/init/
+doc/
 
 # 编辑器
 .vscode/
@@ -27,3 +27,11 @@ vis/
 # Python 缓存
 __pycache__/
 *.pyc
+doc/Stokes_line_by_line.md
+doc/ns-equation.md
+doc/fourier-projection.md
+doc/ns-equation.md
+doc/ns-equation.md
+doc/ns-equation.md
+doc/fourier-projection.md
+doc/discretization.md

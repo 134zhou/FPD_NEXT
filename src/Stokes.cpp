@@ -315,7 +315,7 @@ int step_navier_stokes
         }
     }
 
-    // --- 3b. 泊松右端 b = (1/dt)·∇·v* ---
+    // --- 3b. 泊松右端 b = (1/dt)·div(v*) ---
     // 显式 v* 的意义：壁面条件就落在「v*z 在两壁被钉死」这一句话上，泊松的相容性
     // （Σ_k b̂_k = 0）随之在精确算术下自动成立（见 doc/PressurePoisson.md §8a）。
     // 从面心差分到体心：v*x[ijk] 是右面，tmp_fx[im] 是左面。
