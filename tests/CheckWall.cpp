@@ -88,7 +88,7 @@ static void run_steps(FpdState& st, PhiParams pp, int N, double bgx,
                            st.Fx, st.Fy, st.Fz,
                            st.sum_phix, st.sum_phiy, st.sum_phiz,
                            bgx, bgy, bgz, st.fx, st.fy, st.fz);
-        step_navier_stokes(st.cfg, st.vx, st.vy, st.vz, st.p,
+        step_navier_stokes(st.cfg, st.vx, st.vy, st.vz, st.p, st.p_prev, 0,
                            st.fx, st.fy, st.fz,
                            st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
                            st.cg_r, st.cg_s, st.cg_zq,
@@ -262,7 +262,7 @@ static void w3b_wall_shear_flux()
     }
     st.upload(ST_VELOCITY | ST_PHI);
 
-    step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p,
+    step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.p_prev, 0,
                        st.fx, st.fy, st.fz,
                        st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
                        st.cg_r, st.cg_s, st.cg_zq,
@@ -351,7 +351,7 @@ static void w6_momentum_budget(int Nx, int Ny, int Nz)
         update_force_field(cfg, pp, 0, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz,
                            st.sum_phix, st.sum_phiy, st.sum_phiz,
                            gx, 0.0, gz, st.fx, st.fy, st.fz);
-        step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p,
+        step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.p_prev, 0,
                            st.fx, st.fy, st.fz,
                            st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
                            st.cg_r, st.cg_s, st.cg_zq,
@@ -558,26 +558,46 @@ static void w4_truncation()
 // （Nz=4 时壁面棱边对应的自由度约 2/(2Nz−1) = 29%）。所以小 Nz 不但便宜，
 // 而且判别力最强 —— 与 3A/3B 为了统计量而选大盒子的直觉正好相反。
 // ---------------------------------------------------------------------------
+// 变密度扩展（W5c）：a3 非空时 density_on=1，面心 a = a3[0..size)/[size..2size)/[2size..3size)，
+// 统计量换成 Σ_f ρ_f v_f²（ρ_f = 1/a_f），目标仍是 kT·dim：噪声乘 a、投影在 ρ 加权内积下正交，
+// 离散 OU 过程 A=aK、B=2kT·aKa 的平稳协方差是 kT·diag(a)，迹（限制在无散子空间）为 kT·dim。
+// series_out 非空时返回采样序列，供同 seed 的成对比较。a3 为空时与原 W5b 路径逐位相同。
 static double last_ratio = 0.0, last_sigma = 0.0;
 static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
                              bool gamma1, long n_steps, unsigned long long seed,
-                             bool verbose = true)
+                             bool verbose = true,
+                             const std::vector<double>* a3 = 0, double pcg_tol = 1e-12,
+                             std::vector<double>* series_out = 0)
 {
     NS_Config cfg = make_ns_config(Nx, Ny, Nz, dt, kT, /*noise_on=*/true);
     cfg.noise_gamma1 = gamma1 ? 1 : 0;
+    if (a3) { cfg.density_on = 1; cfg.pcg_tol = pcg_tol; }
 
     FpdState st;
     st.init(cfg, 0, ST_FULL, seed);
     PhiParams pp = make_phi_params(3.2, 1.0, 50.0);
 
     const int size = Nx * Ny * Nz;
+    double rho_max = 1.0;
+    if (a3)
+    {
+        for (int t = 0; t < size; t++)
+        {
+            st.h_inv_rho_x[t] = (*a3)[t];
+            st.h_inv_rho_y[t] = (*a3)[size + t];
+            st.h_inv_rho_z[t] = (*a3)[2 * size + t];
+            rho_max = std::max(rho_max, 1.0 / std::min((*a3)[t], std::min((*a3)[size + t], (*a3)[2 * size + t])));
+        }
+        st.upload(ST_PHI);
+    }
     // dim = n_v − rank(D) = n_v − size + 1（见 W5' 的推导）。
     // 壁面 n_v = Nx·Ny·(3Nz−1)（上壁那一层 vz 不是自由度）。
     // ⚠️ 这个 dim 与 doc/PressurePoisson.md §14.4 的自由度计数推导必须一致。
     const double dim = (double)(Nx * Ny * (2 * Nz - 1) + 1);
 
     // 平衡时间：z 向 Neumann 的最长波长是 2H ⇒ k = π/H
-    const double tau    = 1.0 / ((M_PI / (double)Nz) * (M_PI / (double)Nz));
+    // 变密度时运动粘度 η/ρ 变小，最慢模式按 ρ_max 放长
+    const double tau    = rho_max / ((M_PI / (double)Nz) * (M_PI / (double)Nz));
     const long   n_equil = (long)(8.0 * tau / dt);
     // 采样间隔固定在【物理时间】上（0.2），否则 dt 越小样本越相关
     const long samp_every = std::max(1L, (long)(0.2 / dt));
@@ -592,7 +612,7 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
         update_force_field(cfg, pp, 0, st.Rx, st.Ry, st.Rz, st.Fx, st.Fy, st.Fz,
                            st.sum_phix, st.sum_phiy, st.sum_phiz,
                            0.0, 0.0, 0.0, st.fx, st.fy, st.fz);
-        step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p,
+        step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.p_prev, 0,
                            st.fx, st.fy, st.fz,
                            st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
                            st.cg_r, st.cg_s, st.cg_zq,
@@ -609,17 +629,29 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
             acc_update_self(st.vy, (size_t)size * sizeof(double));
             acc_update_self(st.vz, (size_t)size * sizeof(double));
             double s = 0.0;
-            for (int t = 0; t < size; t++)
+            if (!a3)
             {
-                s += st.vx[t] * st.vx[t] + st.vy[t] * st.vy[t];
-                // 上壁那一层 vz 不是自由度（恒 0，永不更新）
-                if (t / (Nx * Ny) != Nz - 1) { s += st.vz[t] * st.vz[t]; }
+                for (int t = 0; t < size; t++)
+                {
+                    s += st.vx[t] * st.vx[t] + st.vy[t] * st.vy[t];
+                    // 上壁那一层 vz 不是自由度（恒 0，永不更新）
+                    if (t / (Nx * Ny) != Nz - 1) { s += st.vz[t] * st.vz[t]; }
+                }
+            }
+            else
+            {
+                for (int t = 0; t < size; t++)
+                {
+                    s += st.vx[t] * st.vx[t] / st.h_inv_rho_x[t] + st.vy[t] * st.vy[t] / st.h_inv_rho_y[t];
+                    if (t / (Nx * Ny) != Nz - 1) { s += st.vz[t] * st.vz[t] / st.h_inv_rho_z[t]; }
+                }
             }
             series.push_back(s);
         }
     }
     (void)n_slot;
     st.finish();
+    if (series_out) { *series_out = series; }
 
     const int n = (int)series.size();
     BlockStat bs[64];
@@ -627,7 +659,7 @@ static void w5_wall_equipart(int Nx, int Ny, int Nz, double dt, double kT,
     const BlockStat pk = pick_plateau(bs, ns, 20);
 
     const double target = kT * dim;
-    const char* lbl = gamma1 ? "壁面 γ≡1" : "壁面 γ=2";
+    const char* lbl = a3 ? "变密度" : (gamma1 ? "壁面 γ≡1" : "壁面 γ=2");
     if (pk.block_len < 0)
     {
         std::printf("      %-10s 未找到分块平台（误差棒不可信）→ 按设计拒绝背书 FAIL\n", lbl);
@@ -1023,6 +1055,81 @@ int run_check_wall(int Nx, int Ny, int Nz)
     //    基线不存在了 —— 用硬编码常数替代会是【假判据】，所以直接删掉。
     //    更强的替代（留待后续）：把周期控制换成 dt 控制，跑 dt 与 dt/2，
     //    断言 |ratio−1| 大致减半 —— 它识别偏差来源，而不是只比幅度。
+
+    std::printf("\n%s\n", g_fail == 0 ? "全部通过" : "有失败项");
+    return g_fail;
+}
+
+// ============================================================================
+// --check-density-fdt：变密度路径的能量均分（W5c）+ PCG 容差的成对比较。
+//
+// 4³ 壁面盒、无粒子、η≡1，面心 ρ = 1.5 + 0.5·cos(2πx/Nx)cos(2πy/Ny)cos(π(z+½)/Nz) ∈ [1, 2]
+// （直接填 a=1/ρ，不经 Mass.cpp）。目标 <Σ_f ρ_f v_f²> = kT·dim。
+// 参考跑 pcg_tol=1e-12；其余容差用【同一 seed】（同一噪声序列）重跑，逐样本相减后做分块平均，
+// 噪声的共同部分抵消，差值的误差棒远小于单独一次的误差棒。
+// 判据：参考比值与 1 的偏离和 W5b 同量级（< 3%）；各容差与参考之差在统计上不超过 1e-3。
+// ============================================================================
+int run_check_density_fdt(const std::vector<double>& tols)
+{
+    g_fail = 0;
+    const int Nx = 4, Ny = 4, Nz = 4;
+    const int size = Nx * Ny * Nz;
+    const double dt = 0.002, kT = 1.0;
+    const long n_steps = 300000;
+    const double dim = (double)(Nx * Ny * (2 * Nz - 1) + 1);
+
+    std::vector<double> a3((size_t)3 * size, 1.0);
+    for (int k = 0; k < Nz; k++)
+        for (int j = 0; j < Ny; j++)
+            for (int i = 0; i < Nx; i++)
+            {
+                const int ijk = IDX(i, j, k);
+                for (int d = 0; d < 3; d++)
+                {
+                    const double x = i + (d == 0 ? 0.5 : 0.0);
+                    const double y = j + (d == 1 ? 0.5 : 0.0);
+                    const double z = k + (d == 2 ? 0.5 : 0.0);
+                    const double rho = 1.5 + 0.5 * std::cos(2.0 * M_PI * x / Nx)
+                                                 * std::cos(2.0 * M_PI * y / Ny)
+                                                 * std::cos(M_PI * (z + 0.5) / Nz);
+                    a3[(size_t)d * size + ijk] = 1.0 / rho;
+                }
+            }
+
+    std::printf("=== 变密度能量均分 W5c + PCG 容差成对比较（需 GPU）===\n");
+    std::printf("  4³ 壁面盒，ρ ∈ [1,2]，kT=%.2f，dt=%.3f，%ld 步，seed 1（各容差同一噪声序列）\n",
+                kT, dt, n_steps);
+
+    std::vector<double> ref;
+    w5_wall_equipart(Nx, Ny, Nz, dt, kT, false, n_steps, 1ULL, true, &a3, 1e-12, &ref);
+    const double r_ref = last_ratio;
+    std::printf("      参考 pcg_tol=1e-12：<Σρv²>/(kT·dim) = %.4f ± %.4f\n", r_ref, last_sigma);
+    check(std::fabs(r_ref - 1.0) < 0.03, "W5c 变密度能量均分：参考比值与 1 的偏离 < 3%（W5b 同量级）");
+
+    for (double tol : tols)
+    {
+        std::vector<double> ser;
+        w5_wall_equipart(Nx, Ny, Nz, dt, kT, false, n_steps, 1ULL, true, &a3, tol, &ser);
+        const int n = (int)std::min(ser.size(), ref.size());
+        std::vector<double> d(n);
+        for (int t = 0; t < n; t++) { d[t] = (ser[t] - ref[t]) / (kT * dim); }
+        BlockStat bs[64];
+        const int ns = blocking_analysis(d.data(), n, bs, 64);
+        const BlockStat pk = pick_plateau(bs, ns, 20);
+        double maxabs = 0.0;
+        for (int t = 0; t < n; t++) { maxabs = std::max(maxabs, std::fabs(d[t])); }
+        if (pk.block_len < 0)
+        {
+            std::printf("      pcg_tol=%-7.0e 成对差：未找到分块平台；逐样本 max|Δ| = %.3e\n", tol, maxabs);
+            check(maxabs < 1e-3, "W5c 容差成对差（无平台时退回逐样本最大值 < 1e-3）");
+            continue;
+        }
+        std::printf("      pcg_tol=%-7.0e 比值 %.4f   成对差 %+.3e ± %.3e   逐样本 max|Δ| = %.3e\n",
+                    tol, last_ratio, pk.mean, pk.stderr_mean, maxabs);
+        char msg[96];
+        std::snprintf(msg, sizeof(msg), "W5c pcg_tol=%.0e 与参考之差统计上 <= 1e-3", tol);
+        check(std::fabs(pk.mean) - 2.0 * pk.stderr_mean < 1e-3, msg);
+    }
 
     std::printf("\n%s\n", g_fail == 0 ? "全部通过" : "有失败项");
     return g_fail;

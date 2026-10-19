@@ -37,6 +37,11 @@ struct NS_Config
     // 变系数 PCG 的相对残差容差 ||r||/||b||（只在 density_on=1 时使用）。
     // 默认 1e-12；配置键 pcg_tol 可放松，依据见 --pcg-noise 与 --check-density-fdt。
     double pcg_tol;
+
+    // 变密度压力求解方式：0 = PCG（默认）；1 = 压力分裂（Dodd & Ferrante 2014，常系数 FFT 直解
+    // + 外推压力 p̂ = 2pⁿ - pⁿ⁻¹）。只在 density_on=1 时有意义。split_rho0 = min(1, ratio_rho)。
+    int    split;
+    double split_rho0;
 };
 
 // --- 相场参数（POD，按值进 GPU kernel）---
@@ -91,6 +96,8 @@ static inline NS_Config make_ns_config(int Nx, int Ny, int Nz,
     cfg.noise_gamma1 = 0;
     cfg.density_on   = 0;
     cfg.pcg_tol      = 1e-12;
+    cfg.split        = 0;
+    cfg.split_rho0   = 1.0;
     return cfg;
 }
 

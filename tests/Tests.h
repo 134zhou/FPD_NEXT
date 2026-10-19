@@ -1,6 +1,7 @@
 #ifndef TESTS_H
 #define TESTS_H
 
+#include <vector>
 #include "Common.h"
 
 // ============================================================================
@@ -48,6 +49,10 @@ int run_pcg_noise(int Nx, int Ny, int Nz);
 //   W6 z 向动量收支恒等式逐步成立
 // Nx<=0 时用内置盒子（16³）。
 int run_check_wall(int Nx, int Ny, int Nz);
+
+// 变密度能量均分 W5c + PCG 容差的同 seed 成对比较（需 GPU，每个容差约数分钟）。
+// tols 为空时用 {1e-8, 1e-6, 1e-4, 1e-3}。
+int run_check_density_fdt(const std::vector<double>& tols);
 
 // 质量密度场判据（需 GPU）：
 //   MA1 面心 1/rho 与独立 CPU 暴力枚举逐点对照

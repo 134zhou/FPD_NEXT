@@ -30,6 +30,9 @@
 // 独立实现约定：右端 b、修正步、能量都在主机侧手写，只调用生产的 solve_pressure_var
 // 作为被测对象（第 k 次迭代 = PcgTrace{tol=0, max_iter=k}，p0=0 固定所以可重放）。
 // 只打印标量。
+//
+// 同一测量点另评估压力分裂法（cfg.split=1）：压力历史 pⁿ、pⁿ⁻¹ 取自参考 PCG 轨迹的前两步
+// （最有利的历史），跑一步生产 step_navier_stokes(split_now=1)，误差 δv = v_split - v_exact。
 // ============================================================================
 
 static int g_fail = 0;
@@ -152,9 +155,9 @@ static void prep_fields(FpdState& st, PhiParams pp, PotentialParams pot, WallPar
     apply_gravity(cfg, g, st.inv_rho_x, st.inv_rho_y, st.inv_rho_z, st.fx, st.fy, st.fz);
 }
 
-static void ns_step(FpdState& st, NS_Config cfg, long step)
+static void ns_step(FpdState& st, NS_Config cfg, long step, int split_now = 0)
 {
-    step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p,
+    step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p, st.p_prev, split_now,
                        st.fx, st.fy, st.fz,
                        st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
                        st.cg_r, st.cg_s, st.cg_zq,
@@ -198,6 +201,9 @@ int run_pcg_noise(int Nx, int Ny, int Nz)
     cfg.density_on = 1;
     NS_Config cfg0 = cfg;
     cfg0.W = 0.0;
+    NS_Config cfgS = cfg;           // 分裂法只在测量点用；预热轨迹始终是 PCG
+    cfgS.split = 1;
+    cfgS.split_rho0 = 1.0;          // min(1, ratio_rho)
     const PhiParams pp = make_phi_params(3.2, 1.0, 50.0);
     const PotentialParams pot = make_potential_params(POT_WCA, SHIFT_ENERGY, 10.0, 5.7018, 0, 0, 0, 0);
     WallParams wall;
@@ -213,7 +219,7 @@ int run_pcg_noise(int Nx, int Ny, int Nz)
     const double pz[N] = {0.44 * Nz, 0.44 * Nz + 0.3, 0.64 * Nz, 0.56 * Nz};
 
     FpdState st;
-    st.init(cfg, N, ST_FULL, 20261019ULL);
+    st.init(cfgS, N, ST_FULL, 20261019ULL);     // cfgS：顺带分配 p_prev
     for (int n = 0; n < N; n++)
     {
         st.h_Rx[n] = px[n]; st.h_Ry[n] = py[n]; st.h_Rz[n] = pz[n];
@@ -237,6 +243,8 @@ int run_pcg_noise(int Nx, int Ny, int Nz)
     std::vector<double> res_k(KMAX + 1, 0.0), eE_k(KMAX + 1, 0.0), eV_k(KMAX + 1, 0.0),
                         eT_k(KMAX + 1, 0.0);
     double bfrac_min = 1e300, bfrac_max = 0.0;
+    double sE_max = 0.0, sV_max = 0.0, sdiv_max = 0.0;
+    std::vector<double> p_nm1(size), p_n(size);
 
     long step = 0;
     for (int m = 0; m < n_meas; m++)
@@ -251,6 +259,13 @@ int run_pcg_noise(int Nx, int Ny, int Nz)
                                      st.vx, st.vy, st.vz, st.Vx, st.Vy, st.Vz);
             update_particle_position(cfg, N, st.Rx, st.Ry, st.Rz,
                                      st.Rux, st.Ruy, st.Ruz, st.Vx, st.Vy, st.Vz);
+            // 测量点前两步的压力 = 分裂法所需的历史 pⁿ⁻¹、pⁿ
+            if (step == target - 2 || step == target - 1)
+            {
+                #pragma acc update self(st.p[0:size])
+                std::vector<double>& dst = (step == target - 2) ? p_nm1 : p_n;
+                dst.assign(st.p, st.p + size);
+            }
         }
 
         // --- 本步：场准备、两次显式步（W 正常 / W=0）---
@@ -331,6 +346,33 @@ int run_pcg_noise(int Nx, int Ny, int Nz)
             eT_k[k]  = std::max(eT_k[k], std::sqrt(Ee / (kT * dim)));
         }
 
+        // --- 压力分裂法一步（W 正常，与 vsA 同一个 v*）---
+        {
+            for (size_t t = 0; t < size; t++) { st.h_p[t] = p_n[t]; st.h_p_prev[t] = p_nm1[t]; }
+            #pragma acc update device(st.p[0:size], st.p_prev[0:size])
+            put_velocity(st, v0);
+            ns_step(st, cfgS, step, 1);
+            #pragma acc update self(st.vx[0:size], st.vy[0:size], st.vz[0:size], st.diag[0:3])
+            HostFace corr, dv;
+            host_grad_corr(cfg, a, pref, corr);
+            dv.assign(size);
+            for (size_t t = 0; t < size; t++)
+            {
+                dv.x[t] = st.vx[t] - (vsA.x[t] + corr.x[t]);
+                dv.y[t] = st.vy[t] - (vsA.y[t] + corr.y[t]);
+                dv.z[t] = st.vz[t] - (vsA.z[t] + corr.z[t]);
+            }
+            const double sdiv = st.diag[2];
+            const double Ee = rho_energy(cfg, a, dv);
+            std::vector<double> dV;
+            particle_avg(st, pp, dv, dV);
+            double dVmax = 0.0;
+            for (int n = 0; n < N; n++) { dVmax = std::max(dVmax, vec_norm3(dV, n)); }
+            sE_max = std::max(sE_max, std::sqrt(Ee / E_noise));
+            sV_max = std::max(sV_max, dVmax / Vn_rms);
+            sdiv_max = std::max(sdiv_max, sdiv);
+        }
+
         // 恢复本步之前的速度，交回生产轨迹（下一轮 prep+NS 从 v0 重新走这一步）
         put_velocity(st, v0);
     }
@@ -359,6 +401,11 @@ int run_pcg_noise(int Nx, int Ny, int Nz)
     }
     std::printf("  |b_noise|/|b| ∈ [%.3f, %.3f]\n", bfrac_min, bfrac_max);
     if (loosest > 0.0) { std::printf("  满足 ε<=1e-3 的最松容差：%.0e\n", loosest); }
+
+    std::printf("\n  压力分裂法（历史取自参考轨迹，%d 次测量的最大值）：\n", n_meas);
+    std::printf("    ε_E = %.3e   ε_V = %.3e   真残差 ||div v||/||div v*|| = %.3e   %s\n",
+                sE_max, sV_max, sdiv_max,
+                (sE_max <= 1e-3 && sV_max <= 1e-3) ? "满足 ε<=1e-3" : "不满足 ε<=1e-3");
 
     // 硬判据：生产默认容差下误差远小于噪声
     int k12 = 0;

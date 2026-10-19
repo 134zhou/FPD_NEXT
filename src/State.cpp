@@ -89,6 +89,11 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
             h_cg_r.assign(size, 0); h_cg_s.assign(size, 0); h_cg_zq.assign(size, 0);
             cg_r = h_cg_r.data(); cg_s = h_cg_s.data(); cg_zq = h_cg_zq.data();
         }
+        if (cfg.split)
+        {
+            h_p_prev.assign(size, 0);
+            p_prev = h_p_prev.data();
+        }
         pi_dx = h_pi_dx.data(); pi_dy = h_pi_dy.data(); pi_dz = h_pi_dz.data();
         pi_nx = h_pi_nx.data(); pi_ny = h_pi_ny.data(); pi_nz = h_pi_nz.data();
         tmp_fx = h_tmp_fx.data(); tmp_fy = h_tmp_fy.data(); tmp_fz = h_tmp_fz.data();
@@ -127,6 +132,7 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
         api_create(pi_nx, nbEdge); api_create(pi_ny, nbEdge); api_create(pi_nz, nbSize);
         api_create(tmp_fx, nbSize); api_create(tmp_fy, nbSize); api_create(tmp_fz, nbSize);
         if (cg_r) { api_create(cg_r, nbSize); api_create(cg_s, nbSize); api_create(cg_zq, nbSize); }
+        if (p_prev) { api_copyin(p_prev, nbSize); }
         api_create(fft, size * 2 * sizeof(double));
         api_create(randD, slotD * sizeof(double));
         api_create(randN, slotN * sizeof(double));
@@ -159,6 +165,7 @@ void FpdState::finish()
     if (parts & ST_SOLVER)
     {
         api_delete(diag, 3 * sizeof(double));
+        if (p_prev) { api_delete(p_prev, nbSize); p_prev = 0; }
         if (cg_r) { api_delete(cg_zq, nbSize); api_delete(cg_s, nbSize); api_delete(cg_r, nbSize);
                     cg_r = 0; cg_s = 0; cg_zq = 0; }
         api_delete(randN, slotN * sizeof(double));

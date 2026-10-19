@@ -123,11 +123,17 @@ static int run_production(const FpdConfig& c)
                   << ")   rho_p/rho_l = " << c.ratio_rho
                   << "   净体密度 = (rho-rho_l)*g" << std::endl;
     }
-    if (cfg.density_on)
+    if (cfg.density_on && !cfg.split)
     {
         std::cout << "密度对比: rho_p/rho_l = " << c.ratio_rho
                   << "   压力方程 div((1/rho)grad p)=b，FFT 预条件 PCG（容差 " << cfg.pcg_tol
                   << "，上限 " << PCG_MAX_ITER << " 次）" << std::endl;
+    }
+    if (cfg.split)
+    {
+        std::cout << "密度对比: rho_p/rho_l = " << c.ratio_rho
+                  << "   压力分裂法（rho0 = " << cfg.split_rho0
+                  << "，常系数 FFT 直解 + 外推压力；前 2 步 PCG 建立历史）" << std::endl;
     }
 
     std::cout << "开始模拟：" << cfg.Nx << "x" << cfg.Ny << "x" << cfg.Nz
@@ -195,6 +201,8 @@ static int run_production(const FpdConfig& c)
 
     // 变系数压力求解的迭代数统计（只在 density_on 时有意义）
     long cg_sum = 0, cg_max = 0, cg_cnt = 0;
+    // 压力分裂法的有效压力层数（p、p_prev）。不入档：重启后重新用 PCG 建立。
+    int p_hist = 0;
 
     for (long step = start_step; step < c.n_steps; step++)
     {
@@ -269,7 +277,9 @@ static int run_production(const FpdConfig& c)
             apply_gravity(cfg, ext, st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
                           st.fx, st.fy, st.fz);
         }
+        const int split_now = (cfg.split && p_hist >= 2) ? 1 : 0;
         const int cg_iter = step_navier_stokes(cfg, st.vx, st.vy, st.vz, st.p,
+                                               st.p_prev, split_now,
                                                st.fx, st.fy, st.fz,
                                                st.inv_rho_x, st.inv_rho_y, st.inv_rho_z,
                                                st.cg_r, st.cg_s, st.cg_zq,
@@ -282,7 +292,8 @@ static int run_production(const FpdConfig& c)
         // solve_pressure_var 在主机侧写好了 diag[1]（见 Poisson.h），不需要额外同步。
         // 收敛 ⟺ diag[1] <= pcg_tol；NaN 也会落进「未收敛」。
         bool pcg_failed = false;
-        if (cfg.density_on)
+        if (cfg.split && p_hist < 2) { p_hist++; }
+        if (cfg.density_on && !split_now)
         {
             cg_sum += cg_iter; cg_cnt++;
             if (cg_iter > cg_max) { cg_max = cg_iter; }
