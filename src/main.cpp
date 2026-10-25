@@ -189,8 +189,7 @@ static int run_production(const FpdConfig& c)
 
         if (step % c.interval_ckpt == 0)
         {
-            // 拉全检查点需要的数组（含 Fx/Fy/Fz —— 原来漏过，力恒 0 时无害，
-            // 加粒子间力后会写出陈旧主机端零值；现在一步拉全，不再有遗漏）
+            // 回传检查点需要的速度和粒子状态。
             st.download(ST_VELOCITY | ST_PARTICLE);
             if (check_wall_bounds(step)) { writer.write(step); rc = 3; break; }
             if (!writer.write(step)) { rc = 2; break; }
@@ -254,7 +253,6 @@ static int run_production(const FpdConfig& c)
             std::cerr << "错误: step " << step << " PCG 未收敛：迭代 " << cg_iter
                       << " 次，相对残差 " << std::scientific << st.diag[1]
                       << "（容差 " << cfg.pcg_tol << "）。落盘后中止\n" << std::fixed;
-            step_forces(sp, st);
             st.download(ST_VELOCITY | ST_PARTICLE);
             writer.write(step + 1);
             rc = 3;
@@ -265,9 +263,6 @@ static int run_production(const FpdConfig& c)
     // 终态检查点（目标步），失败路径已在上面落过盘
     if (rc == 0)
     {
-        // 循环里最后一次 update_particle_position 更新了 R，而 F 只在循环开头算。
-        // 补算一次，保证「文件里的 F 对应文件里的 R」。
-        step_forces(sp, st);
         st.download(ST_VELOCITY | ST_PARTICLE);
         if (!writer.write(c.n_steps)) { rc = 2; }
     }

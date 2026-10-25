@@ -196,16 +196,18 @@ lj126 要 `eps, sigma, rcut`（壁面势同理，前缀 `wall_`）。`Nx/Ny/Nz` 
 C++ 只读写二进制 `.fpd`；初态、检查点、续跑文件是同一格式，文件里的 `step` 决定起点。
 
 ```
-magic "FPDCKPT\0" | endian 0x01020304 | version=3 | Nx Ny Nz N (int32) | step (int64)
-vx vy vz [size]  |  Rx Ry Rz Rux Ruy Ruz Vx Vy Vz Fx Fy Fz [N]   （f64，IDX 顺序连续）
+magic "FPDCKPT\0" | endian 0x01020304 | version=4 | Nx Ny Nz N (int32) | step (int64)
+vx vy vz [size]  |  Rx Ry Rz Rux Ruy Ruz Vx Vy Vz [N]   （f64，IDX 顺序连续）
 checksum (FNV-1a，覆盖此前全部字节)
 ```
 
-- 文件大小恒为 `48 + 24*size + 96*N` 字节，`fpd_tool --dump-ckpt` 校验这一点。
-  压力、粘度、密度、`S_i`、力密度、RNG 状态和物理参数都不入档；其他版本明确拒绝。
+- 文件大小恒为 `48 + 24*size + 72*N` 字节，`fpd_tool --dump-ckpt` 校验这一点。
+  粒子受力、压力、粘度、密度、`S_i`、力密度、RNG 状态和物理参数都不入档；其他版本明确拒绝。
+- v4 不兼容旧文件；v3 及更早的初态需重新生成。每份文件比 v3 减少 `24*N` 字节。
+  VTK 粒子数据不再包含 `force`，保留位置、`velocity` 和 `unwrapped`。
 - 格式由 `src/include/IOBin.h` 与 `tools/fpd_format.py` 共同定义；numpy 形状为 `(Nz, Ny, Nx)`。
 - 载入后检查上壁 `vz[:,:,Nz-1]` 逐位为 0（否则泊松相容性失效），不满足即拒绝。
-- 检查点路径 `<out_dir>/<run_name>_<step 补零 7 位>.fpd`；终态在 `n_steps` 写出，文件里的 F 与 R 对应。
+- 检查点路径 `<out_dir>/<run_name>_<step 补零 7 位>.fpd`；终态在 `n_steps` 写出。粒子受力每步由当前位置重算。
 
 ```bash
 # 1. 生成初态：编辑 tools/make_init.py 顶部数据块（网格、半径、POINTS、OUT）后运行，仅依赖 stdlib
@@ -232,7 +234,6 @@ $PV/bin/pvpython tools/fpd2vtk.py out/sed_[0-9]*.fpd --config config/sed.cfg -o 
 ```bash
 ./build/fpd_tool --dump-ckpt <f> [--at i j k]              # 头部、尺寸校验；--at 打印格点速度
 ./build/fpd_tool --diff-ckpt <a> <b>                       # 逐位比较
-./build/fpd_tool --verify-forces <ckpt> <config>           # 按配置重算 F（势 + 壁面）与文件对照
 ./build/fpd_tool --sed-stats out/sed_[0-9]*.fpd --config config/sed.cfg [--window A B] [--bins K]
 ```
 
@@ -416,3 +417,10 @@ RTX 3060，`ratio_rho ≠ 1` 时每步一次 PCG（约 16 次迭代，每次一�
 - **对流项误乘 1/ρ**：变密度初版把整个 `∇·Π` 乘 a，均匀密度下对流加速度错一个因子；由 V0 守住。
 - 旧代码中不可照抄的 bug：cell list 邻居表漏赋值导致每个 cell 都把 0 号 cell 当邻居；z 向反射 hack
   在投影之后改 `vz`；重力硬编码 `-10`；读写 header 字段顺序不一致。
+
+### v4 IO 回归（2026-10-26）
+
+归档见 `baseline/ckpt_v4_20261025/README.md`。C++/Python 互操作、完整性拒绝、
+近壁单粒子及非重叠双粒子的新旧共同状态逐位对照、单粒子整文件逐位重启均通过。
+独立力判据继续保留；移除依赖存档受力的 `--verify-forces` 自洽检查。
+VTK 字段检查已更新，`pvpython` 自检和往返验证待用户执行。

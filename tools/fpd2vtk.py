@@ -180,7 +180,7 @@ def convert_file(job):
         return (names[-1], step, True, bname)
 
     want = ["Rx", "Ry", "Rz", "Rux", "Ruy", "Ruz",
-            "Vx", "Vy", "Vz", "Fx", "Fy", "Fz"]
+            "Vx", "Vy", "Vz"]
     if not particles_only:
         want += ["vx", "vy", "vz"]
     arrs = read_arrays(path, header, want)
@@ -290,7 +290,6 @@ def write_vtp(path, header, arrs):
 
     if N > 0:
         vel = add("velocity", "Vx", "Vy", "Vz")
-        add("force", "Fx", "Fy", "Fz")
         # 不折叠位置：粒子穿越周期边界时 R 会瞬移，Ru 不会，做轨迹/MSD 用这个
         add("unwrapped", "Rux", "Ruy", "Ruz")
         pd.GetPointData().SetVectors(vel)
@@ -374,7 +373,25 @@ def self_test():
     print("  x 插值 内部格点: %s  期望 %s  %s"
           % (inner, want, "PASS" if ok_interp else "FAIL"))
 
-    return 0 if (ok_axis and ok_interp) else 1
+    # 构造临时粒子文件，检查 v4 不再输出受力。
+    import tempfile
+    vtk, _ = _need_vtk()
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "particles.vtp")
+        header = F.default_header(8, 4, 2, 1)
+        arrs = {name: np.array([float(i)])
+                for i, name in enumerate(F.PARTICLE_ARRAYS)}
+        write_vtp(path, header, arrs)
+        reader = vtk.vtkXMLPolyDataReader()
+        reader.SetFileName(path)
+        reader.Update()
+        data = reader.GetOutput()
+        pd = data.GetPointData()
+        ok_fields = (data.GetNumberOfPoints() == 1 and pd.GetArray("force") is None
+                     and pd.GetArray("velocity") is not None
+                     and pd.GetArray("unwrapped") is not None)
+    print("  v4 粒子字段（无 force）: %s" % ("PASS" if ok_fields else "FAIL"))
+    return 0 if (ok_axis and ok_interp and ok_fields) else 1
 
 
 def main():

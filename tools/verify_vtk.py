@@ -79,6 +79,10 @@ def main():
           % (vel.shape[0], rel, "[PASS]" if rel < 1e-6 else "[FAIL]"))
     ok &= (rel < 1e-6)
 
+    no_force = parts.GetPointData().GetArray("force") is None
+    print("粒子不含 force: %s" % ("[PASS]" if no_force else "[FAIL]"))
+    ok &= no_force
+
     # --- 粒子 ---
     N = header["N"]
     pts = ns.vtk_to_numpy(parts.GetPoints().GetData())

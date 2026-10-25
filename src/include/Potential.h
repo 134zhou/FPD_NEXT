@@ -239,7 +239,7 @@ void compute_particle_forces(NS_Config cfg, PotentialParams pot,
                              double* Fx, double* Fy, double* Fz);
 
 // CPU 参考实现：串行 i<j 半矩阵。与 GPU 版是两份独立实现（各自验证装配逻辑），
-// 供纯 CPU 判据（CheckPotential.cpp）与 fpd_tool 的 --verify-forces 使用。
+// 供 GPU/CPU 力装配对照（CheckStencil.cpp、CheckWall.cpp）使用。
 void compute_particle_forces_cpu(NS_Config cfg, PotentialParams pot,
                                  WallParams wall,
                                  int N,

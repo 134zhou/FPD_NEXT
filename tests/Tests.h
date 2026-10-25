@@ -20,6 +20,9 @@ int run_overlap_check(NS_Config cfg, PhiParams pp);
 // 配置解析、必填参数与归档往返（纯 CPU）
 int run_config_check();
 
+// C++/Python 检查点互操作（纯 CPU），输入目录由归档脚本生成。
+int run_io_check(const char* directory);
+
 // 势函数自检（纯 CPU，无卡可跑）：力=-dU/dr、黄金表、最小镜像、N=3、特征点
 int run_potential_check();
 

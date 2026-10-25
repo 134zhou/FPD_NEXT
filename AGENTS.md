@@ -141,8 +141,9 @@ W8e 是近壁 GPU/CPU 力装配对照（重力不在装配里，F_g 是给定值
 
 C++ 只读写 .fpd；init_file 必填，同一文件格式用于初态和重启，文件 step 决定起点。
 n_steps 是绝对目标步数。网格尺寸、N、step 来自文件，其余参数来自配置；逐位重启须保持同一配置和 seed。
-格式由 src/include/IOBin.h 与 tools/fpd_format.py 共同定义，当前版本为 3；其他版本明确拒绝。
-数据区只有 vx/vy/vz 与 12 个粒子数组，文件大小恒为 48+24*size+96*N（--dump-ckpt 校验）。
+格式由 src/include/IOBin.h 与 tools/fpd_format.py 共同定义，当前版本为 4；其他版本明确拒绝。
+数据区只有 vx/vy/vz 与 9 个粒子数组（R/Ru/V，不存受力），文件大小恒为 48+24*size+72*N（--dump-ckpt 校验）。
+粒子受力每步由 R 重算，不入档；v3 初态需重新生成，VTK 不再输出 force。
 p 是求解器内部状态：不入档、FpdState::download 不回传；测试需要时显式 `acc update self`。
 .config.used 不含尺寸键，离线工具用 --config 读取物理量。
 numpy 形状必须为 (Nz, Ny, Nx)；版本、字段顺序与 FNV-1a 两侧同步。

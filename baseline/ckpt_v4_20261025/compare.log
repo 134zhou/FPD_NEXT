@@ -1,0 +1,9 @@
+PASS wall step=0：12 个共同数组逐位一致，节省 24 字节，旧 max|F|=12
+PASS wall step=5：12 个共同数组逐位一致，节省 24 字节，旧 max|F|=11.9999805
+PASS wall step=10：12 个共同数组逐位一致，节省 24 字节，旧 max|F|=11.9918371
+PASS pair_disjoint step=0：12 个共同数组逐位一致，节省 48 字节，旧 max|F|=0.012
+PASS pair_disjoint step=5：12 个共同数组逐位一致，节省 48 字节，旧 max|F|=0.0120001013
+PASS pair_disjoint step=10：12 个共同数组逐位一致，节省 48 字节，旧 max|F|=0.0120002813
+PASS 单粒子连续 10 步 vs 5+5 重启：整个文件逐位一致
+PASS 零步运行：均提示已达到目标，不生成检查点
+PASS failed 落盘：共同状态逐位一致，v4 无受力

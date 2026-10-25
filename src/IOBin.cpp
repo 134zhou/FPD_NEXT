@@ -121,7 +121,6 @@ bool save_checkpoint(const char* path, const CkptHeader& h_in,
     w.arr(a.Rx, N);  w.arr(a.Ry, N);  w.arr(a.Rz, N);
     w.arr(a.Rux, N); w.arr(a.Ruy, N); w.arr(a.Ruz, N);
     w.arr(a.Vx, N);  w.arr(a.Vy, N);  w.arr(a.Vz, N);
-    w.arr(a.Fx, N);  w.arr(a.Fy, N);  w.arr(a.Fz, N);
 
     // 校验和本身不参与哈希
     const uint64_t sum = w.hash.h;
@@ -220,7 +219,6 @@ bool read_checkpoint(CkptReader& ctx, const CkptHeader& h,
     r.arr(a.Rx, N);  r.arr(a.Ry, N);  r.arr(a.Rz, N);
     r.arr(a.Rux, N); r.arr(a.Ruy, N); r.arr(a.Ruz, N);
     r.arr(a.Vx, N);  r.arr(a.Vy, N);  r.arr(a.Vz, N);
-    r.arr(a.Fx, N);  r.arr(a.Fy, N);  r.arr(a.Fz, N);
 
     if (!r.ok)
     {

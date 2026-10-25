@@ -209,7 +209,6 @@ CkptArrays FpdState::ckpt_arrays() const
     a.Rx = Rx; a.Ry = Ry; a.Rz = Rz;
     a.Rux = Rux; a.Ruy = Ruy; a.Ruz = Ruz;
     a.Vx = Vx; a.Vy = Vy; a.Vz = Vz;
-    a.Fx = Fx; a.Fy = Fy; a.Fz = Fz;
     return a;
 }
 

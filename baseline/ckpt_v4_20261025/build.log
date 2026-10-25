@@ -1,0 +1,84 @@
+[  7%] Building CXX object src/CMakeFiles/fpd_core.dir/IOBin.cpp.o
+[ 14%] Building CXX object src/CMakeFiles/fpd_core.dir/State.cpp.o
+[ 21%] Building CXX object src/CMakeFiles/fpd_core.dir/Step.cpp.o
+[ 28%] Linking CXX static library ../libfpd_core.a
+[ 85%] Built target fpd_core
+[ 92%] Building CXX object src/CMakeFiles/fpd.dir/main.cpp.o
+[100%] Linking CXX executable ../fpd
+[100%] Built target fpd
+[ 52%] Built target fpd_core
+[ 56%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckMass.cpp.o
+[ 60%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckPcgNoise.cpp.o
+[ 65%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckPoisson.cpp.o
+[ 69%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckStencil.cpp.o
+[ 73%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckWall.cpp.o
+[ 78%] Building CXX object tests/CMakeFiles/fpd_check.dir/PcgCalib.cpp.o
+[ 82%] Linking CXX executable ../fpd_check
+nvlink warning : SM Arch ('sm_75') not found in 'CMakeFiles/fpd_check.dir/Analysis.cpp.o'
+nvlink warning : SM Arch ('sm_80') not found in 'CMakeFiles/fpd_check.dir/Analysis.cpp.o'
+[100%] Built target fpd_check
+[ 80%] Built target fpd_core
+[ 86%] Building CXX object tests/CMakeFiles/fpd_tool.dir/tool_main.cpp.o
+[ 93%] Linking CXX executable ../fpd_tool
+nvlink warning : SM Arch ('sm_75') not found in 'CMakeFiles/fpd_tool.dir/Analysis.cpp.o'
+nvlink warning : SM Arch ('sm_80') not found in 'CMakeFiles/fpd_tool.dir/Analysis.cpp.o'
+[100%] Built target fpd_tool
+[ 80%] Built target fpd_core
+[ 86%] Building CXX object tests/CMakeFiles/fpd_calib.dir/PcgCalib.cpp.o
+[ 93%] Building CXX object tests/CMakeFiles/fpd_calib.dir/calib_main.cpp.o
+[100%] Linking CXX executable ../fpd_calib
+[100%] Built target fpd_calib
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/doll/Documents/C++/FPD_NEXT/build
+[ 50%] Built target fpd_core
+[ 54%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckConfig.cpp.o
+[ 58%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckMain.cpp.o
+[ 62%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckMass.cpp.o
+[ 66%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckPcgNoise.cpp.o
+[ 70%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckPoisson.cpp.o
+[ 75%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckPotential.cpp.o
+[ 79%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckStencil.cpp.o
+[ 83%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckWall.cpp.o
+[ 87%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckIO.cpp.o
+[ 91%] Linking CXX executable ../fpd_check
+nvlink warning : SM Arch ('sm_75') not found in 'CMakeFiles/fpd_check.dir/Analysis.cpp.o'
+nvlink warning : SM Arch ('sm_80') not found in 'CMakeFiles/fpd_check.dir/Analysis.cpp.o'
+[100%] Built target fpd_check
+[  7%] Building CXX object src/CMakeFiles/fpd_core.dir/Potential.cpp.o
+[ 14%] Building CXX object src/CMakeFiles/fpd_core.dir/Config.cpp.o
+[ 21%] Building CXX object src/CMakeFiles/fpd_core.dir/Step.cpp.o
+[ 28%] Linking CXX static library ../libfpd_core.a
+[ 85%] Built target fpd_core
+[ 92%] Building CXX object src/CMakeFiles/fpd.dir/main.cpp.o
+[100%] Linking CXX executable ../fpd
+[100%] Built target fpd
+[ 50%] Built target fpd_core
+[ 58%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckConfig.cpp.o
+[ 58%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckMass.cpp.o
+[ 66%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckPotential.cpp.o
+[ 66%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckPcgNoise.cpp.o
+[ 70%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckStencil.cpp.o
+[ 75%] Building CXX object tests/CMakeFiles/fpd_check.dir/CheckWall.cpp.o
+[ 79%] Building CXX object tests/CMakeFiles/fpd_check.dir/PcgCalib.cpp.o
+[ 83%] Linking CXX executable ../fpd_check
+nvlink warning : SM Arch ('sm_75') not found in 'CMakeFiles/fpd_check.dir/Analysis.cpp.o'
+nvlink warning : SM Arch ('sm_80') not found in 'CMakeFiles/fpd_check.dir/Analysis.cpp.o'
+[100%] Built target fpd_check
+[ 80%] Built target fpd_core
+[ 86%] Building CXX object tests/CMakeFiles/fpd_tool.dir/tool_main.cpp.o
+[ 93%] Linking CXX executable ../fpd_tool
+nvlink warning : SM Arch ('sm_75') not found in 'CMakeFiles/fpd_tool.dir/Analysis.cpp.o'
+nvlink warning : SM Arch ('sm_80') not found in 'CMakeFiles/fpd_tool.dir/Analysis.cpp.o'
+[100%] Built target fpd_tool
+[ 80%] Built target fpd_core
+[ 86%] Building CXX object tests/CMakeFiles/fpd_calib.dir/calib_main.cpp.o
+[ 93%] Building CXX object tests/CMakeFiles/fpd_calib.dir/PcgCalib.cpp.o
+[100%] Linking CXX executable ../fpd_calib
+[100%] Built target fpd_calib
+[ 80%] Built target fpd_core
+[ 86%] Building CXX object tests/CMakeFiles/fpd_tool.dir/tool_main.cpp.o
+[ 93%] Linking CXX executable ../fpd_tool
+nvlink warning : SM Arch ('sm_75') not found in 'CMakeFiles/fpd_tool.dir/Analysis.cpp.o'
+nvlink warning : SM Arch ('sm_80') not found in 'CMakeFiles/fpd_tool.dir/Analysis.cpp.o'
+[100%] Built target fpd_tool

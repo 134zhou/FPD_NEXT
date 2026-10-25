@@ -2,7 +2,6 @@
 //
 //   fpd_tool --dump-ckpt <file> [--at i j k]
 //   fpd_tool --diff-ckpt <a> <b>
-//   fpd_tool --verify-forces <ckpt> <config.used>
 //   fpd_tool --sed-stats <f1> <f2> ... [--window A B] [--bins K]
 #include <cstdio>
 #include <cstring>
@@ -14,7 +13,6 @@
 
 #include "IOBin.h"
 #include "Config.h"
-#include "Potential.h"
 #include "Analysis.h"     // 分块平均与平台判据：沉降统计与 fpd_check 【共用同一份】
 
 static void usage()
@@ -22,7 +20,6 @@ static void usage()
     printf("用法:\n");
     printf("  fpd_tool --dump-ckpt <file> [--at i j k]   打印头部；--at 打印指定格点的 v\n");
     printf("  fpd_tool --diff-ckpt <a> <b>              逐位比较两个检查点\n");
-    printf("  fpd_tool --verify-forces <ckpt> <config>  用配置重算粒子力，与文件里的 F 对照\n");
     printf("  fpd_tool --sed-stats <f1> <f2> ... --config <cfg>        沉降统计：<Vz>(t)、质心、最小壁面间隙、φ(z)\n");
     printf("      [--window A B]  只统计 step ∈ [A,B] 的检查点（缺省用后一半）\n");
     printf("      [--bins K]      φ(z) 的分箱数（缺省 16）\n");
@@ -32,7 +29,7 @@ static void usage()
 struct Holder
 {
     std::vector<double> vx, vy, vz;
-    std::vector<double> Rx, Ry, Rz, Rux, Ruy, Ruz, Vx, Vy, Vz, Fx, Fy, Fz;
+    std::vector<double> Rx, Ry, Rz, Rux, Ruy, Ruz, Vx, Vy, Vz;
     CkptArrays a;
 
     void alloc(const CkptHeader& h)
@@ -43,31 +40,29 @@ struct Holder
         Rx.assign(N,0); Ry.assign(N,0); Rz.assign(N,0);
         Rux.assign(N,0); Ruy.assign(N,0); Ruz.assign(N,0);
         Vx.assign(N,0); Vy.assign(N,0); Vz.assign(N,0);
-        Fx.assign(N,0); Fy.assign(N,0); Fz.assign(N,0);
 
         a.vx = vx.data(); a.vy = vy.data(); a.vz = vz.data();
         a.Rx = Rx.data(); a.Ry = Ry.data(); a.Rz = Rz.data();
         a.Rux = Rux.data(); a.Ruy = Ruy.data(); a.Ruz = Ruz.data();
         a.Vx = Vx.data(); a.Vy = Vy.data(); a.Vz = Vz.data();
-        a.Fx = Fx.data(); a.Fy = Fy.data(); a.Fz = Fz.data();
     }
 };
 
-// .fpd 尺寸判据：v3 不含 p，文件大小必须精确等于
-//   40（magic+endian+header）+ (3*size + 12*N)*8（数组）+ 8（校验和）
-//   = 48 + 24*size + 96*N。
-// 任何新增的整场数组（尤其是 p）都会让这条守卫失败 —— 这是「p 不入档」的回归判据。
+// .fpd 尺寸判据：v4 不含 p 和粒子受力，文件大小必须精确等于
+//   40（magic+endian+header）+ (3*size + 9*N)*8（数组）+ 8（校验和）
+//   = 48 + 24*size + 72*N。
+// 任何新增的整场数组（尤其是 p）都会让这条守卫失败 —— 这是「p 和粒子受力不入档」的回归判据。
 static bool check_ckpt_size(const char* path, const CkptHeader& h)
 {
     struct stat st;
     if (stat(path, &st) != 0) { fprintf(stderr, "错误: 无法 stat %s\n", path); return false; }
 
-    const long long expected = 48LL + 24LL * (long long)h.size() + 96LL * (long long)h.N;
-    printf("  文件大小     %lld 字节（无 p 期望 %lld）\n",
+    const long long expected = 48LL + 24LL * (long long)h.size() + 72LL * (long long)h.N;
+    printf("  文件大小     %lld 字节（v4 期望 %lld）\n",
            (long long)st.st_size, expected);
     if ((long long)st.st_size != expected)
     {
-        fprintf(stderr, "错误: %s 的大小 %lld 与无 p 布局 %lld 不符（多了/少了整场数组？）\n",
+        fprintf(stderr, "错误: %s 的大小 %lld 与 v4 布局 %lld 不符（多了/少了整场数组？）\n",
                 path, (long long)st.st_size, expected);
         return false;
     }
@@ -155,12 +150,6 @@ static int cmd_diff(const char* pa, const char* pb)
         {"Vx", A.Vx.data(), B.Vx.data(), N},
         {"Vy", A.Vy.data(), B.Vy.data(), N},
         {"Vz", A.Vz.data(), B.Vz.data(), N},
-        // Fx/Fy/Fz 曾经漏掉。加粒子间力/壁面势之后，力是逐位重启对照里最该看的量
-        // —— 它是 R 的【原因】，R 逐位相同但 F 不同说明「同一构型下力算得不一样」，
-        // 那比轨迹漂移更早、更清楚地暴露问题。
-        {"Fx", A.Fx.data(), B.Fx.data(), N},
-        {"Fy", A.Fy.data(), B.Fy.data(), N},
-        {"Fz", A.Fz.data(), B.Fz.data(), N},
     };
 
     int nbad = 0;
@@ -194,59 +183,6 @@ static int cmd_diff(const char* pa, const char* pb)
     }
     printf("%s\n", nbad == 0 ? "全部逐位相同" : "存在差异");
     return nbad == 0 ? 0 : 1;
-}
-
-// J7：检查点自洽性。读 .fpd 里的 R，用配置里的势参数重算 F，与文件里的 F 对照。
-// 势参数不进 .fpd header（见 PROGRESS.md 决策记录），这条判据把「不自描述」的代价
-// 从静默变成可检测 —— 配错势参数会在这里 FAIL。
-static int cmd_verify_forces(const char* ckpt_path, const char* cfg_path)
-{
-    std::string err;
-
-    CkptHeader h;
-    if (!read_ckpt_header(ckpt_path, h, err))
-    { fprintf(stderr, "错误: %s\n", err.c_str()); return 1; }
-
-    Holder holder;
-    holder.alloc(h);
-    if (!load_checkpoint(ckpt_path, h, holder.a, err))
-    { fprintf(stderr, "错误: %s\n", err.c_str()); return 1; }
-
-    FpdConfig fc;
-    if (!load_config(cfg_path, fc, err))
-    { fprintf(stderr, "错误: %s\n", err.c_str()); return 1; }
-
-    fc.Nx = h.Nx; fc.Ny = h.Ny; fc.Nz = h.Nz;
-    NS_Config cfg = make_ns_config(fc);
-    PotentialParams pot = make_potential_params(fc);
-    WallParams wall = make_wall_params(fc);
-
-    std::vector<double> Fx(h.N), Fy(h.N), Fz(h.N);
-    compute_particle_forces_cpu(cfg, pot, wall, h.N,
-                                holder.Rx.data(), holder.Ry.data(), holder.Rz.data(),
-                                Fx.data(), Fy.data(), Fz.data());
-
-    // 对比（容差：文件里的 F 是 GPU 全矩阵算的，这里是 CPU 串行 i<j，浮点顺序不同，
-    // 差 ~1e-15 相对；配错参数会差 O(1)）
-    double maxabs = 0.0, fmag = 0.0;
-    for (int n = 0; n < h.N; n++)
-    {
-        double d1 = fabs(Fx[n] - holder.Fx[n]);
-        double d2 = fabs(Fy[n] - holder.Fy[n]);
-        double d3 = fabs(Fz[n] - holder.Fz[n]);
-        maxabs = fmax(maxabs, fmax(d1, fmax(d2, d3)));
-        fmag = fmax(fmag, fmax(fabs(holder.Fx[n]), fmax(fabs(holder.Fy[n]), fabs(holder.Fz[n]))));
-    }
-    const double tol = 1e-10 * (fmag > 0.0 ? fmag : 1.0);
-    const bool ok = maxabs < tol;
-
-    printf("=== verify-forces %s ===\n", ckpt_path);
-    printf("  势 = %s   壁面势 = %s   N = %d\n",
-           fc.potential.c_str(), fc.wallpotential.c_str(), h.N);
-    printf("  文件里的 F 只含势 + 壁面力（重力是体力，不在这里重算）；\n");
-    printf("  重算 F vs 文件 F: max |ΔF| = %.3e   阈值 %.3e   %s\n",
-           maxabs, tol, ok ? "PASS" : "FAIL");
-    return ok ? 0 : 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -510,11 +446,6 @@ int main(int argc, char** argv)
     {
         if (argc < 4) { usage(); return 2; }
         return cmd_diff(argv[2], argv[3]);
-    }
-    if (strcmp(argv[1], "--verify-forces") == 0)
-    {
-        if (argc < 4) { usage(); return 2; }
-        return cmd_verify_forces(argv[2], argv[3]);
     }
     if (strcmp(argv[1], "--sed-stats") == 0) { return cmd_sed_stats(argc, argv); }
     usage();

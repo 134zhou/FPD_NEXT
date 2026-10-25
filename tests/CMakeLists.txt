@@ -2,6 +2,7 @@
 add_executable(fpd_check
     Analysis.cpp
     CheckMain.cpp
+    CheckIO.cpp
     CheckConfig.cpp
     CheckStencil.cpp
     CheckPotential.cpp

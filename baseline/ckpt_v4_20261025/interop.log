@@ -1,0 +1,23 @@
+PASS IO N=0：Python 输入全部字段逐位正确，C++ 写出 
+PASS IO N=2：Python 输入全部字段逐位正确，C++ 写出 
+PASS IO 拒绝 old：/home/doll/Documents/C++/FPD_NEXT/baseline/ckpt_v4_20261025/interop/old.fpd 的版本是 3，本程序只认 4
+PASS IO 拒绝 corrupt：检查点校验和不匹配：期望 0x924ec993dc75c893，实际 0x596d9e3d3711e6c0
+PASS IO 拒绝 truncated：检查点数据区被截断
+PASS IO 拒绝 trailing：检查点尾部有多余数据
+=== /home/doll/Documents/C++/FPD_NEXT/baseline/ckpt_v4_20261025/interop/cpp_0.fpd ===
+  version      4
+  网格         8 x 4 x 2   (size = 64)
+  粒子数 N     0
+  step         7
+  文件大小     1584 字节（v4 期望 1584）
+  校验和       通过
+  --- v at (i=3, j=1, k=1)  IDX=43 ---
+  vx = 3001001
+  vy = 3001001.25
+  vz = 3001001.5
+PASS Python 读取 C++ N=0：文件长度、全部字节、校验和及字段集
+PASS Python 读取 C++ N=2：文件长度、全部字节、校验和及字段集
+PASS Python 拒绝 v3
+PASS Python 校验拒绝 corrupt
+PASS Python 校验拒绝 truncated
+PASS Python 校验拒绝 trailing

@@ -14,13 +14,13 @@
 // 布局（小端，裸二进制）：
 //   magic     char[8]   "FPDCKPT\0"
 //   endian    uint32    0x01020304        读端校验
-//   version   uint32    3
+//   version   uint32    4
 //   Nx,Ny,Nz,N          int32 x4
 //   step                int64
 //   --- 数组，f64，按线性 IDX = i + j*Nx + k*Nx*Ny 顺序【连续】存放 ---
 //   vx[size], vy[size], vz[size]
 //   Rx[N],Ry[N],Rz[N], Rux[N],Ruy[N],Ruz[N]
-//   Vx[N],Vy[N],Vz[N], Fx[N],Fy[N],Fz[N]
+//   Vx[N],Vy[N],Vz[N]
 //   --- 尾部 ---
 //   checksum  uint64    FNV-1a，覆盖此前所有字节
 //
@@ -33,8 +33,8 @@
 //    所以 ratio_rho 不在 .fpd 里，必须与初态/续跑用同一个配置（.config.used）。
 //
 // ⚠️ 压力 p 也【不】入档（v3 起）。它是求解器内部状态，不是续跑状态。
-//    因此合法 v3 文件的大小恒为 48 + 24*size + 96*N 字节
-//    （magic 8 + endian 4 + header 28 + 3*size*8 + 12*N*8 + checksum 8）；
+//    因此合法 v4 文件的大小恒为 48 + 24*size + 72*N 字节
+//    （magic 8 + endian 4 + header 28 + 3*size*8 + 9*N*8 + checksum 8）；
 //    fpd_tool --dump-ckpt 会校验这条，防止整场数组（尤其是 p）悄悄回流。
 //
 // ⚠️ 数组是【一次 fread/fwrite】的连续块，不做三重循环。
@@ -42,12 +42,12 @@
 // ============================================================================
 
 // v3 删除物理参数、RNG 记录、压力标志及压力数据，只保留续跑状态。
-// v2 及更早版本由版本检查明确拒绝。
+// v4 删除粒子受力（每步由 R 重算）；v3 及更早版本由版本检查明确拒绝。
 // 历史：version 1 → 2（Phase 8-A）时 z 周期存档语义被删除。
 //    v1 的存档可能是 z 周期构型（vz[...,Nz-1] 非 0）。那样的初态会直接破坏
 //    泊松的相容性条件 Σ_k b̂_k = 0，表现为压力的线性漂移，且【看不出错】。
 #define FPD_MAGIC       "FPDCKPT"
-#define FPD_VERSION     3u
+#define FPD_VERSION     4u
 #define FPD_ENDIAN_TAG  0x01020304u
 
 struct CkptHeader
@@ -66,7 +66,6 @@ struct CkptArrays
     double *Rx = 0, *Ry = 0, *Rz = 0;
     double *Rux = 0, *Ruy = 0, *Ruz = 0;
     double *Vx = 0, *Vy = 0, *Vz = 0;
-    double *Fx = 0, *Fy = 0, *Fz = 0;
 };
 
 // 生产路径可先读头、分配数组，再从同一句柄读取数据与校验和。

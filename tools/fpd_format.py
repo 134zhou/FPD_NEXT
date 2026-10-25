@@ -17,8 +17,8 @@
 import struct
 
 MAGIC       = b"FPDCKPT\0"
-# v3 只存尺寸、粒子数和步数；物理参数从配置读取。
-VERSION     = 3
+# v4 不存粒子受力；头部只存尺寸、粒子数和步数，物理参数从配置读取。
+VERSION     = 4
 ENDIAN_TAG  = 0x01020304
 FNV_OFFSET = 14695981039346656037
 FNV_PRIME  = 1099511628211
@@ -31,7 +31,7 @@ HEADER_FIELDS = [
 ]
 # 粒子数组的顺序，同样必须与 C++ 侧一致
 PARTICLE_ARRAYS = ["Rx", "Ry", "Rz", "Rux", "Ruy", "Ruz",
-                   "Vx", "Vy", "Vz", "Fx", "Fy", "Fz"]
+                   "Vx", "Vy", "Vz"]
 
 
 class Fnv:
