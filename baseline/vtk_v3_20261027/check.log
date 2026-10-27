@@ -1,0 +1,18 @@
+PASS v3 N=0/2 全字段、偏移、长度及 v3/v4 模块隔离
+并行 2 个进程，共 3 个文件（可用内存 25.75 GiB，单文件估算 0.39 GiB）
+  run_0000000.fpd -> run_0000000.vtm (+ .vti/.vtp)
+  run_0000002.fpd -> run_0000002.vtm (+ .vti/.vtp)
+  run_0000001.fpd -> run_0000001.vtm (+ .vti/.vtp)
+单 worker 峰值 RSS 实测 0.35 GiB（模型估算 0.39 GiB）
+
+扫描 3 个文件：转换 3，跳过 0。pvd 现含 3 个时间步。在 ParaView 里打开：
+  /tmp/tmpm9cn_sbu/vis/run.pvd
+PASS 双进程完整转换，流体/粒子数值、空粒子、无 force、VTM/PVD 时间轴
+并行 2 个进程，共 3 个文件（可用内存 25.76 GiB，单文件估算 0.39 GiB）
+  跳过 run_0000000.fpd（产物已存在）
+  跳过 run_0000001.fpd（产物已存在）
+  跳过 run_0000002.fpd（产物已存在）
+
+扫描 3 个文件：转换 0，跳过 3。pvd 现含 3 个时间步。在 ParaView 里打开：
+  /tmp/tmpm9cn_sbu/vis/run.pvd
+PASS 重跑增量跳过及索引合并
