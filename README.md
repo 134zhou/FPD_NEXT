@@ -214,6 +214,10 @@ checksum (FNV-1a，覆盖此前全部字节)
 #    POINTS = None 时按 PHI 随机生成离壁 ≥ WALL_MARGIN 的不重叠构型；也可直接写坐标列表
 python3 tools/make_init.py
 
+# 或将已有 v4 checkpoint 转为 step=0 初态（保留所有速度和粒子数据，输出须为新文件）
+python3 tools/checkpoint_to_init.py out/sed_0010000.fpd init/from_checkpoint.fpd
+# 将配置的 init_file 指向新文件；step 归零后噪声序列也从第 0 步重新开始
+
 # 2. 运行与续跑（同一配置、同一 seed；把检查点当 init_file）
 ./build/fpd config/sed.cfg
 ./build/fpd config/sed.cfg --set init_file=out/sed_0010000.fpd --set n_steps=400000
