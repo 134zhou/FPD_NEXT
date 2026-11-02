@@ -28,8 +28,10 @@ std::vector<FieldDesc> config_fields(FpdConfig& c)
         {"noise_on",       F_INT,    &c.noise_on,       false, "0/1，关掉则 W=0"},
         {"pcg_tol",        F_DOUBLE, &c.pcg_tol,        false, "变系数压力 PCG 的相对残差容差（ratio_rho != 1 时用）"},
 
-        {"potential",      F_STRING, &c.potential,      false, "粒子间势: none|wca|morse|lj126"},
+        {"pair_search", F_STRING, &c.pair_search, false, "粒子搜索: auto|direct|cell"},
+        {"potential",      F_STRING, &c.potential,      false, "粒子间势: none|wca|morse|lj126|yukawa"},
         {"pot_eps",        F_DOUBLE, &c.pot_eps,        false, "WCA/LJ 的 ε"},
+        {"pot_kappa", F_DOUBLE, &c.pot_kappa, false, "Yukawa 屏蔽系数"},
         {"pot_sigma",      F_DOUBLE, &c.pot_sigma,      false, "WCA/LJ 的 σ"},
         {"pot_De",         F_DOUBLE, &c.pot_De,         false, "Morse 阱深 De"},
         {"pot_alpha",      F_DOUBLE, &c.pot_alpha,      false, "Morse 宽度参数 alpha"},
@@ -37,8 +39,9 @@ std::vector<FieldDesc> config_fields(FpdConfig& c)
         {"pot_rcut",       F_DOUBLE, &c.pot_rcut,       false, "LJ/Morse 截断半径（WCA 派生，不应给）"},
         {"pot_shift",      F_STRING, &c.pot_shift,      false, "截断移位: none|energy|force"},
 
-        {"wallpotential",   F_STRING, &c.wallpotential,   false, "粒子-壁面排斥势: none|wca|morse|lj126"},
+        {"wallpotential",   F_STRING, &c.wallpotential,   false, "粒子-壁面排斥势: none|wca|morse|lj126|yukawa"},
         {"wall_eps",       F_DOUBLE, &c.wall_eps,       false, "壁面势 WCA/LJ 的 ε"},
+        {"wall_kappa", F_DOUBLE, &c.wall_kappa, false, "Yukawa 屏蔽系数"},
         {"wall_sigma",     F_DOUBLE, &c.wall_sigma,     false, "壁面势 WCA/LJ 的 σ（自变量是表面间隙 h）"},
         {"wall_De",        F_DOUBLE, &c.wall_De,        false, "壁面势 Morse 阱深 De"},
         {"wall_alpha",     F_DOUBLE, &c.wall_alpha,     false, "壁面势 Morse 宽度参数 alpha"},
@@ -225,13 +228,18 @@ bool validate_config(const FpdConfig& c, std::string& err)
         {"pot_",  "potential", "pot_shift",  &c.potential,  &c.pot_shift},
         {"wall_", "wallpotential", "wall_shift", &c.wallpotential, &c.wall_shift},
     };
+    if (c.pair_search != "auto" && c.pair_search != "direct" && c.pair_search != "cell")
+    {
+        err = "pair_search 的合法取值是 auto | direct | cell";
+        return false;
+    }
     for (int f = 0; f < 2; f++)
     {
         const PotFamily& F = fams[f];
         const std::string& pn = *F.pot;
-        if (pn != "none" && pn != "wca" && pn != "morse" && pn != "lj126")
+        if (pn != "none" && pn != "wca" && pn != "morse" && pn != "lj126" && pn != "yukawa")
         {
-            err = std::string(F.potential_key) + " 的合法取值是 none | wca | morse | lj126，收到 '" + pn + "'";
+            err = std::string(F.potential_key) + " 的合法取值是 none | wca | morse | lj126 | yukawa，收到 '" + pn + "'";
             return false;
         }
         if (*F.shift != "none" && *F.shift != "energy" && *F.shift != "force")
@@ -249,6 +257,7 @@ bool validate_config(const FpdConfig& c, std::string& err)
             if (pn == "morse") { needed[nn++] = p("De");  needed[nn++] = p("alpha");
                                  needed[nn++] = p("r_eq"); needed[nn++] = p("rcut"); }
             if (pn == "lj126") { needed[nn++] = p("eps"); needed[nn++] = p("sigma"); needed[nn++] = p("rcut"); }
+            if (pn == "yukawa") { needed[nn++] = p("eps"); needed[nn++] = p("sigma"); needed[nn++] = p("kappa"); needed[nn++] = p("rcut"); }
             std::string missing;
             for (int j = 0; j < nn; j++)
             {
@@ -372,6 +381,7 @@ PotentialParams make_potential_params(const FpdConfig& c)
     int type;
     if      (c.potential == "wca")   { type = POT_WCA;   }
     else if (c.potential == "morse") { type = POT_MORSE; }
+    else if (c.potential == "yukawa") { type = POT_YUKAWA; }
     else if (c.potential == "lj126") { type = POT_LJ126; }
     else                             { type = POT_NONE;  }
 
@@ -381,7 +391,7 @@ PotentialParams make_potential_params(const FpdConfig& c)
     else                              { shift = SHIFT_ENERGY; }
 
     return make_potential_params(type, shift, c.pot_eps, c.pot_sigma,
-                                 c.pot_De, c.pot_alpha, c.pot_r_eq, c.pot_rcut);
+                                 c.pot_De, c.pot_alpha, c.pot_r_eq, c.pot_rcut, c.pot_kappa);
 }
 
 // 与 make_potential_params 逐字同构，只是换成 wall_* 字段。
@@ -391,6 +401,7 @@ WallParams make_wall_params(const FpdConfig& c)
     int type;
     if      (c.wallpotential == "wca")   { type = POT_WCA;   }
     else if (c.wallpotential == "morse") { type = POT_MORSE; }
+    else if (c.wallpotential == "yukawa") { type = POT_YUKAWA; }
     else if (c.wallpotential == "lj126") { type = POT_LJ126; }
     else                            { type = POT_NONE;  }
 
@@ -401,7 +412,7 @@ WallParams make_wall_params(const FpdConfig& c)
 
     WallParams wp;
     wp.pot    = make_potential_params(type, shift, c.wall_eps, c.wall_sigma,
-                                      c.wall_De, c.wall_alpha, c.wall_r_eq, c.wall_rcut);
+                                      c.wall_De, c.wall_alpha, c.wall_r_eq, c.wall_rcut, c.wall_kappa);
     wp.radius = c.radius;
     return wp;
 }

@@ -7,6 +7,7 @@
 #include "Common.h"
 #include "IOBin.h"
 #include "Wall.h"
+#include "Neighbor.h"
 
 // ============================================================================
 // FpdState —— 主机侧存储 + 设备映射 + FFT/RNG 句柄的唯一持有者
@@ -40,6 +41,8 @@ constexpr unsigned ST_FULL      = ST_KINEMATIC| ST_SOLVER;
 
 struct FpdState
 {
+    NeighborWorkspace neighbor;
+    void prepare_neighbor(double rcut);
     NS_Config cfg;
     int    N       = 0;      // 粒子数（可为 0，见 init）
     int    nalloc  = 1;      // = max(N,1)；acc_* 对 0 字节危险，clamp 到 1

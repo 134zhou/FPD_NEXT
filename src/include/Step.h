@@ -18,6 +18,7 @@
 // 一步所需的全部 POD 参数，由 FpdConfig（尺寸已取自 init_file）构造一次。
 struct StepParams
 {
+    int pair_search; // 0 自动，1 全遍历，2 分箱
     NS_Config       cfg;
     PhiParams       pp;
     PotentialParams pot;

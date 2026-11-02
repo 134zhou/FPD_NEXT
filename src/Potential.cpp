@@ -3,10 +3,11 @@
 PotentialParams make_potential_params(int type, int shift,
                                       double eps, double sigma,
                                       double De, double alpha, double r_eq,
-                                      double rcut)
+                                      double rcut, double kappa)
 {
     PotentialParams pp;
     pp.type   = type;
+    pp.kappa  = kappa;
     pp.shift  = shift;
     pp.eps    = eps;
     pp.sigma  = sigma;
@@ -40,6 +41,17 @@ void compute_particle_forces(NS_Config cfg, PotentialParams pot,
                              const double* Rx, const double* Ry, const double* Rz,
                              double* Fx, double* Fy, double* Fz)
 {
+    if (pot.type == POT_NONE)
+    {
+        #pragma acc parallel loop present(Rz, Fx, Fy, Fz)
+        for (int i = 0; i < N; ++i)
+        {
+            Fx[i] = 0.0;
+            Fy[i] = 0.0;
+            Fz[i] = wall_force_z(wall, cfg, Rz[i]);
+        }
+        return;
+    }
     const double Lx = (double)cfg.Nx, Ly = (double)cfg.Ny;
     const double Lz = pbc_length_z(cfg);   // 壁面模式下退化为恒等映射（z 不折叠）
 

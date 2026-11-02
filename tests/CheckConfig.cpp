@@ -83,16 +83,16 @@ int run_config_check()
               !validate_config(c, err), (kv + " 在 --set 中被拒绝").c_str());
     }
 
-    const char* models[] = {"none", "wca", "morse", "lj126"};
+    const char* models[] = {"none", "wca", "morse", "lj126", "yukawa"};
     const char* params[][4] = {
         {0, 0, 0, 0}, {"eps=1", "sigma=2", 0, 0},
-        {"De=1", "alpha=1", "r_eq=2", "rcut=5"}, {"eps=1", "sigma=2", "rcut=5", 0}
+        {"De=1", "alpha=1", "r_eq=2", "rcut=5"}, {"eps=1", "sigma=2", "rcut=5", 0}, {"eps=1", "sigma=2", "kappa=0.4", "rcut=5"}
     };
     for (int family = 0; family < 2; family++)
     {
         const std::string key = family ? "wallpotential" : "potential";
         const std::string prefix = family ? "wall_" : "pot_";
-        for (int model = 0; model < 4; model++)
+        for (int model = 0; model < 5; model++)
         {
             const std::string label = key + "=" + models[model];
             bool ok = load(base + label + "\n", c);

@@ -25,8 +25,12 @@
 #include "Tests.h"
 #include "Analysis.h"
 
+int run_neighbor_check(bool bench);
+
 int main(int argc, char** argv)
 {
+    if (argc > 1 && std::strcmp(argv[1], "--check-neighbor") == 0) { return run_neighbor_check(false); }
+    if (argc > 1 && std::strcmp(argv[1], "--bench-neighbor") == 0) { return run_neighbor_check(true); }
     // 自检与验证路径用内置参数，不读配置文件
     const int    Nx = 128, Ny = 64, Nz = 32;
     const double dt        = 0.001;

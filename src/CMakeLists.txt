@@ -9,6 +9,8 @@ add_library(fpd_core STATIC
     Config.cpp
     IOBin.cpp
     State.cpp
+    Neighbor.cpp
+    Neighbor.cu
     Potential.cpp
     Poisson.cpp
     Step.cpp

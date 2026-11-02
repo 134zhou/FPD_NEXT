@@ -1,0 +1,4 @@
+N=1000 L=30 type=4 rcut=8 error=3.381e-16 repeat=PASS direct_ms=0.4925 cell_ms=1.4967 speedup=0.329
+N=10000 L=65 type=4 rcut=8 error=5.019e-16 repeat=PASS direct_ms=27.2717 cell_ms=14.7924 speedup=1.844
+N=30000 L=94 type=4 rcut=8 error=4.641e-16 repeat=PASS direct_ms=230.5775 cell_ms=44.6139 speedup=5.168
+N=100000 L=140 type=4 rcut=8 error=4.942e-16 repeat=PASS direct_ms=2496.0689 cell_ms=155.5193 speedup=16.050

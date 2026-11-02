@@ -150,8 +150,14 @@ void FpdState::init(NS_Config cfg_, int N_, unsigned want, unsigned long long se
     }
 }
 
+void FpdState::prepare_neighbor(double rcut)
+{
+    if (!neighbor.capacity && N > 1) { neighbor_allocate(neighbor, cfg, N, rcut); }
+}
+
 void FpdState::finish()
 {
+    if (neighbor.capacity) { neighbor_release(neighbor); }
     const size_t nbN    = (size_t)nalloc * sizeof(double);
     const size_t nbSize = size * sizeof(double);
 

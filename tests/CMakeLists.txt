@@ -1,6 +1,7 @@
 # 自检与验证程序。Analysis.cpp 提供常量表和分块平均。
 add_executable(fpd_check
     Analysis.cpp
+    CheckNeighbor.cpp
     CheckMain.cpp
     CheckIO.cpp
     CheckConfig.cpp

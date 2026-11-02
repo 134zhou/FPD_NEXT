@@ -6,13 +6,13 @@ set(CMAKE_CXX_COMPILER "nvc++")
 # 如果系统不识别 nvc++，请替换为绝对路径，例如：
 # set(CMAKE_CXX_COMPILER "/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/compilers/bin/nvc++")
 
-project(MyProject LANGUAGES CXX)
+project(MyProject LANGUAGES CXX CUDA)
 
 # 1. 设置全局编译选项
-add_compile_options(-g -O3 -Wall)
+add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-g;-O3;-Wall>")
 
 # 2. 设置 OpenACC 标志
-add_compile_options(-acc)
+add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-acc>)
 add_link_options(-acc)
 
 # 3. 查找 CUDA 库

@@ -428,3 +428,19 @@ RTX 3060，`ratio_rho ≠ 1` 时每步一次 PCG（约 16 次迭代，每次一�
 近壁单粒子及非重叠双粒子的新旧共同状态逐位对照、单粒子整文件逐位重启均通过。
 独立力判据继续保留；移除依赖存档受力的 `--verify-forces` 自洽检查。
 VTK 字段检查已更新，`pvpython` 自检和往返验证待用户执行。
+
+### Yukawa 与近邻搜索（2026-11-02）
+
+`potential=yukawa` 必填 `pot_eps, pot_sigma, pot_kappa, pot_rcut`。裸势
+`U(r)=eps*sigma/r*exp(-kappa*(r-sigma))`，粒子间 r 是球心距离；
+`wallpotential=yukawa` 使用对应 wall_ 参数，距离是表面间隙。
+支持 none/energy/force 移位，默认 energy。
+
+`pair_search=auto|direct|cell`（默认 auto）。auto 在 N>=10000 且邻箱不覆盖整个盒子时
+使用每步重建的 GPU 排序分箱，其余使用全遍历。cell 可强制分箱以做小体系对照。
+分箱只排序索引，不改变粒子编号；x/y 周期、z 非周期。无 Verlet 缓存或 skin。
+两种路径改变浮点求和顺序，不承诺跨路径逐位一致。固定密度和有限截断下候选对近似线性增长，
+大截断或聚集时仍可能退化。CUDA Toolkit 的 CUB 排序用于设备端建箱。
+
+验证入口：`fpd_check --check-neighbor`、`fpd_check --bench-neighbor`。
+当前性能及验收进度见 `baseline/yukawa_20261102/` 和 PROGRESS.md；尚未完成全部计划验收。

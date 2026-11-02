@@ -316,6 +316,29 @@ int run_potential_check()
         check_golden(morse, morse_pts, 6, "J2 Morse 黄金表对照");
     }
 
+    // Yukawa：独立幂函数参考与移位后能量数值微分，不要求力变号。
+    for (int shift = SHIFT_NONE; shift <= SHIFT_FORCE; ++shift)
+    {
+        PotentialParams p = make_potential_params(POT_YUKAWA, shift, 2, 3, 0, 0, 0, 12, 0.4);
+        double error = 0.0;
+        bool ok = true;
+        for (double r : {1.5, 3.0, 5.0, 11.0})
+        {
+            const double u = 6 * std::exp(-0.4 * (r-3)) / r;
+            const double f = 6 * std::exp(-0.4 * (r-3)) * (std::pow(r,-2) + 0.4/r);
+            ok = ok && std::abs(pair_energy_bare(p,r)-u) < 1e-12*std::fmax(1.0,std::abs(u));
+            ok = ok && std::abs(pair_force_over_r_bare(p,r)*r-f) < 1e-12*std::fmax(1.0,std::abs(f));
+            const double h = r*1e-4;
+            const double derivative = (pair_energy(p,(r-2*h)*(r-2*h))
+                -8*pair_energy(p,(r-h)*(r-h))+8*pair_energy(p,(r+h)*(r+h))
+                -pair_energy(p,(r+2*h)*(r+2*h)))/(12*h);
+            error=std::fmax(error,std::abs(derivative+pair_force_over_r(p,r*r)*r)/std::fmax(1.0,std::abs(f)));
+        }
+        ok = ok && pair_energy(p,144)==0 && pair_force_over_r(p,144)==0;
+        check(ok && error < 1e-7, "Yukawa 独立参考与移位后差分");
+        std::printf("      shift=%d derivative_error=%.3e\n",shift,error);
+    }
+
     // J3：最小镜像
     check_min_image();
 

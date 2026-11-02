@@ -44,6 +44,8 @@ struct FpdConfig
     // --- 粒子间势（可选；potential=none 时以下全部不用）---
     std::string potential = "none";   // none | wca | morse | lj126
     double pot_eps    = 0.0;          // WCA/LJ 的 ε
+    std::string pair_search = "auto"; // auto/direct/cell
+    double pot_kappa = 0.0;          // Yukawa 屏蔽系数
     double pot_sigma  = 0.0;          // WCA/LJ 的 σ
     double pot_De     = 0.0;          // Morse 阱深
     double pot_alpha  = 0.0;          // Morse 宽度参数（叫 alpha 不叫 a —— a 是粒子半径）
@@ -58,6 +60,7 @@ struct FpdConfig
     //    粒子间势的参数静默绑定。
     std::string wallpotential = "none"; // none | wca | morse | lj126
     double wall_eps    = 0.0;         // WCA/LJ 的 ε
+    double wall_kappa = 0.0;         // 壁面 Yukawa 屏蔽系数
     double wall_sigma  = 0.0;         // WCA/LJ 的 σ
     double wall_De     = 0.0;         // Morse 阱深
     double wall_alpha  = 0.0;         // Morse 宽度参数

@@ -19,7 +19,7 @@
 //    （README「数值判据」）同一个陷阱。
 // ============================================================================
 
-enum PotentialType { POT_NONE = 0, POT_WCA = 1, POT_MORSE = 2, POT_LJ126 = 3 };
+enum PotentialType { POT_NONE = 0, POT_WCA = 1, POT_MORSE = 2, POT_LJ126 = 3, POT_YUKAWA = 4 };
 enum ShiftMode     { SHIFT_NONE = 0, SHIFT_ENERGY = 1, SHIFT_FORCE = 2 };//如何从原始势平滑地变成零
 //SHIFT_NONE直接截断，不平滑，
 // 适合 rcut 足够远、势和力都已经非常小时，
@@ -39,6 +39,7 @@ struct PotentialParams
     double eps, sigma;    // WCA / LJ12-6 的 ε 与 σ
     double De, alpha, r_eq;  // Morse 的阱深、宽度、平衡距离（宽度参数叫 alpha 不叫 a
                              // —— a 是粒子半径，见 README.md 的相场公式）
+    double kappa;         // Yukawa 屏蔽系数
     double rcut, rcut2;
     double u_at_rc;       // 派生：U_bare(rcut)
     double dudr_at_rc;    // 派生：U'_bare(rcut)
@@ -63,7 +64,7 @@ struct WallParams
 PotentialParams make_potential_params(int type, int shift,
                                       double eps, double sigma,
                                       double De, double alpha, double r_eq,
-                                      double rcut);
+                                      double rcut, double kappa = 0.0);
 
 // 最小镜像的【唯一】实现。前提：位置已折叠到 [0,L)，故单次折叠足够
 //（由 Velocity.cpp 的 update_particle_position 保证）。
@@ -109,6 +110,8 @@ static inline double pair_energy_bare(PotentialParams pp, double r)
             const double s6 = s2 * s2 * s2;          // (σ/r)⁶
             return 4.0 * pp.eps * (s6 * s6 - s6);
         }
+        case POT_YUKAWA:
+            return pp.eps * pp.sigma / r * exp(-pp.kappa * (r - pp.sigma));
         case POT_MORSE:
         {
             const double E = exp(-pp.alpha * (r - pp.r_eq));
@@ -130,6 +133,9 @@ static inline double pair_force_over_r_bare(PotentialParams pp, double r)
             const double s6 = s2 * s2 * s2;          // (σ/r)⁶
             return 24.0 * pp.eps * s6 * (2.0 * s6 - 1.0) / (r * r);
         }
+        case POT_YUKAWA:
+            return pp.eps * pp.sigma * exp(-pp.kappa * (r - pp.sigma))
+                 * (1.0 + pp.kappa * r) / (r * r * r);
         case POT_MORSE:
         {
             const double E = exp(-pp.alpha * (r - pp.r_eq));

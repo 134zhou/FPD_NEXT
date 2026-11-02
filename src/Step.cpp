@@ -9,6 +9,7 @@
 StepParams make_step_params(const FpdConfig& effective)
 {
     StepParams sp;
+    sp.pair_search = effective.pair_search == "direct" ? 1 : (effective.pair_search == "cell" ? 2 : 0);
     sp.cfg   = make_ns_config(effective);
     sp.pp    = make_phi_params(effective);
     sp.pot   = make_potential_params(effective);
@@ -20,6 +21,13 @@ StepParams make_step_params(const FpdConfig& effective)
 
 void step_forces(const StepParams& sp, FpdState& st)
 {
+    if (use_cell_search(sp.pair_search, st.N, sp.cfg, sp.pot))
+    {
+        st.prepare_neighbor(sp.pot.rcut);
+        compute_particle_forces_cell(sp.cfg, sp.pot, sp.wall, st.N, st.Rx, st.Ry, st.Rz,
+                                     st.Fx, st.Fy, st.Fz, st.neighbor);
+        return;
+    }
     compute_particle_forces(sp.cfg, sp.pot, sp.wall, st.N, st.Rx, st.Ry, st.Rz,
                             st.Fx, st.Fy, st.Fz);
 }
