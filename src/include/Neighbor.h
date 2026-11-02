@@ -26,5 +26,5 @@ void neighbor_build(NeighborWorkspace w, NS_Config cfg, int N,
 void compute_particle_forces_cell(NS_Config cfg, PotentialParams pot, WallParams wall,
                                  int N, const double* Rx, const double* Ry, const double* Rz,
                                  double* Fx, double* Fy, double* Fz, NeighborWorkspace w);
-bool use_cell_search(int mode, int N, NS_Config cfg, PotentialParams pot);
+bool use_cell_search(int mode, int N, PotentialParams pot);
 #endif

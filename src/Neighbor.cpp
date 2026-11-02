@@ -2,13 +2,11 @@
 #include <algorithm>
 #include <openacc.h>
 
-// mode：0 自动、1 全遍历、2 强制分箱。只有粒子对势使用邻箱，壁面力不参与。
-// auto 的保守规则：小体系或各方向都不超过三箱时，使用全遍历以省去建箱开销。
-bool use_cell_search(int mode, int N, NS_Config cfg, PotentialParams pot)
+// mode：1 全遍历、2 分箱。搜索方式必须显式指定，不按规模自动切换。
+// 没有粒子对相互作用时省去建箱，壁面力仍由原路径计算。
+bool use_cell_search(int mode, int N, PotentialParams pot)
 {
-    if (pot.type == POT_NONE || N < 2 || mode == 1) { return false; }
-    if (mode == 2) { return true; }
-    return N >= 10000 && (cfg.Nx/pot.rcut >= 4 || cfg.Ny/pot.rcut >= 4 || cfg.Nz/pot.rcut >= 4);
+    return mode == 2 && N >= 2 && pot.type != POT_NONE;
 }
 
 void compute_particle_forces_cell(NS_Config cfg, PotentialParams pot, WallParams wall,

@@ -28,7 +28,7 @@ std::vector<FieldDesc> config_fields(FpdConfig& c)
         {"noise_on",       F_INT,    &c.noise_on,       false, "0/1，关掉则 W=0"},
         {"pcg_tol",        F_DOUBLE, &c.pcg_tol,        false, "变系数压力 PCG 的相对残差容差（ratio_rho != 1 时用）"},
 
-        {"pair_search", F_STRING, &c.pair_search, false, "粒子搜索: auto|direct|cell"},
+        {"pair_search", F_STRING, &c.pair_search, true, "粒子搜索（必填）: direct|cell"},
         {"potential",      F_STRING, &c.potential,      false, "粒子间势: none|wca|morse|lj126|yukawa"},
         {"pot_eps",        F_DOUBLE, &c.pot_eps,        false, "WCA/LJ 的 ε"},
         {"pot_kappa", F_DOUBLE, &c.pot_kappa, false, "Yukawa 屏蔽系数"},
@@ -228,9 +228,9 @@ bool validate_config(const FpdConfig& c, std::string& err)
         {"pot_",  "potential", "pot_shift",  &c.potential,  &c.pot_shift},
         {"wall_", "wallpotential", "wall_shift", &c.wallpotential, &c.wall_shift},
     };
-    if (c.pair_search != "auto" && c.pair_search != "direct" && c.pair_search != "cell")
+    if (c.pair_search != "direct" && c.pair_search != "cell")
     {
-        err = "pair_search 的合法取值是 auto | direct | cell";
+        err = "pair_search 的合法取值是 direct | cell";
         return false;
     }
     for (int f = 0; f < 2; f++)

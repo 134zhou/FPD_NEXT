@@ -436,8 +436,10 @@ VTK 字段检查已更新，`pvpython` 自检和往返验证待用户执行。
 `wallpotential=yukawa` 使用对应 wall_ 参数，距离是表面间隙。
 支持 none/energy/force 移位，默认 energy。
 
-`pair_search=auto|direct|cell`（默认 auto）。auto 在 N>=10000 且邻箱不覆盖整个盒子时
-使用每步重建的 GPU 排序分箱，其余使用全遍历。cell 可强制分箱以做小体系对照。
+`pair_search=direct|cell` 是必填项，没有默认值：direct 全遍历，cell 强制分箱。
+配置或 `--set pair_search=cell` 均可提供；缺失、空值或旧值 auto 明确报错。
+旧配置运行前必须补充搜索方式（即使 potential=none 也必须提供）。
+无粒子对相互作用（N<2 或 potential=none）时跳过建箱，仍计算壁面力。
 分箱只排序索引，不改变粒子编号；x/y 周期、z 非周期。无 Verlet 缓存或 skin。
 两种路径改变浮点求和顺序，不承诺跨路径逐位一致。固定密度和有限截断下候选对近似线性增长，
 大截断或聚集时仍可能退化。CUDA Toolkit 的 CUB 排序用于设备端建箱。

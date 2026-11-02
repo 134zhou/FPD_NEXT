@@ -40,7 +40,7 @@ static int run_production(const FpdConfig& c)
     const PhiParams pp  = sp.pp;
     const int size = cfg.Nx * cfg.Ny * cfg.Nz;
     const int N = h.N;
-    std::cout << "粒子搜索: " << (use_cell_search(sp.pair_search, N, cfg, sp.pot) ? "cell" : "direct") << std::endl;
+    std::cout << "粒子搜索: " << (use_cell_search(sp.pair_search, N, sp.pot) ? "cell" : "direct") << std::endl;
     const long start_step = (long)h.step;
     if (start_step >= c.n_steps)
     {

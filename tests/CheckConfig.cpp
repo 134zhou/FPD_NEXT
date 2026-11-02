@@ -15,7 +15,7 @@ int run_config_check()
     close(fd);
     const std::string base =
         "init_file=test.fpd\ndt=0.002\nn_steps=200\n"
-        "kT=0.25\nradius=3.2\nxi=1\nratio_eta=50\nratio_rho=2\n";
+        "kT=0.25\nradius=3.2\nxi=1\nratio_eta=50\nratio_rho=2\npair_search=direct\n";
     std::string err;
     int fails = 0;
     auto check = [&](bool ok, const char* name)
@@ -39,6 +39,19 @@ int run_config_check()
     };
 
     FpdConfig c;
+    {
+        std::string missing = base;
+        const std::string key = "pair_search=direct\n";
+        missing.erase(missing.find(key), key.size());
+        check(load(missing, c) && !validate_config(c, err) &&
+              err.find("pair_search") != std::string::npos, "pair_search 缺失报错（包括无粒子势）");
+        check(apply_override(c, "pair_search=cell", err) && validate_config(c, err),
+              "--set 可补齐必填搜索方式");
+        check(load(base + "pair_search=auto\n", c) && !validate_config(c, err),
+              "pair_search=auto 被拒绝");
+        check(load(base + "pair_search=cell\n", c) && validate_config(c, err),
+              "显式 cell 被接受");
+    }
     check(load(base.substr(base.find('\n') + 1), c) && !validate_config(c, err) &&
           err.find("init_file") != std::string::npos,
           "init_file 缺失报错");
@@ -46,7 +59,7 @@ int run_config_check()
         // ratio_rho 是与 ratio_eta 同级的物理必填项：缺了要响亮失败，
         // 不能静默按 rho_p = rho_l 跑。
         std::string no_rho = base;
-        const std::string key = "ratio_rho=2\n";
+        const std::string key = "ratio_rho=2\npair_search=direct\n";
         const size_t pos = no_rho.find(key);
         no_rho.erase(pos, key.size());
         check(load(no_rho, c) && !validate_config(c, err) &&

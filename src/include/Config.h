@@ -44,7 +44,7 @@ struct FpdConfig
     // --- 粒子间势（可选；potential=none 时以下全部不用）---
     std::string potential = "none";   // none | wca | morse | lj126
     double pot_eps    = 0.0;          // WCA/LJ 的 ε
-    std::string pair_search = "auto"; // auto/direct/cell
+    std::string pair_search; // 必填：direct/cell
     double pot_kappa = 0.0;          // Yukawa 屏蔽系数
     double pot_sigma  = 0.0;          // WCA/LJ 的 σ
     double pot_De     = 0.0;          // Morse 阱深

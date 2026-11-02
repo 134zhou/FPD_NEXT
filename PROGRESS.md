@@ -498,3 +498,9 @@ GPU check、wall、pcg-noise 通过；direct/cell 单粒子及双粒子 6 步运
 ### 2026-11-02 近邻代码注释
 
 按用户要求补充 Neighbor.cpp/.cu/.h 中文说明：箱宽与搜索完备性、64 位排序键、空箱区间、周期少箱去重、z 壁面坐标、CUDA/OpenACC 同步与指针所有权、固定归约顺序和复杂度。仅改注释；验收使用去除注释后的源码与 HEAD 比较一致及 git diff --check，不重跑 GPU 数值实验。
+
+### 2026-11-02 搜索方式改为必填
+
+用户要求删除 auto。计划：配置字段取消默认并标为 required，仅接受 direct/cell；删除规模阈值分派；没有粒子对时保留跳过建箱。旧配置必须显式补齐，历史配置不自动改写。验收：配置缺失/auto 拒绝、--set 补齐、归档往返；合法 direct/cell 检查点与改动前逐位相同，并复核单粒子重启。
+
+验收完成：fpd/fpd_check 构建成功，--check-config 全部通过；GPU direct/cell 的 N=1/2 六步检查点与改动前逐位相同，第 3 步重启到第 6 步逐位相同。脚本与日志见 baseline/required_search_20261102/。仅配置要求和搜索选择改变，力计算 kernel 未改。
