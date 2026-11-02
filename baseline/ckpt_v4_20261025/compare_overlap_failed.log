@@ -1,9 +1,0 @@
-PASS wall step=0：12 个共同数组逐位一致，节省 24 字节，旧 max|F|=12
-PASS wall step=5：12 个共同数组逐位一致，节省 24 字节，旧 max|F|=11.9999805
-PASS wall step=10：12 个共同数组逐位一致，节省 24 字节，旧 max|F|=11.9918371
-PASS pair step=0：12 个共同数组逐位一致，节省 48 字节，旧 max|F|=13.9334744
-Traceback (most recent call last):
-  File "/home/doll/Documents/C++/FPD_NEXT/baseline/ckpt_v4_20261025/compare.py", line 17, in <module>
-    assert a == b, (case, step, field, sum(x!=y for x,y in zip(a,b)))
-           ^^^^^^
-AssertionError: ('pair', 5, 'vx', 24333)

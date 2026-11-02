@@ -1,9 +1,0 @@
-从 baseline/ckpt_v4_20261025/pair_v3.fpd 载入（step=0，N=2）
-势: wca   shift=energy   rcut=6.40005
-壁面势: wca   shift=energy   rcut=2.24492   a=3.2（自变量是表面间隙 h = z_壁 - a）
-重力加速度: (0, 0, -0.058718)   rho_p/rho_l = 2   净体密度 = (rho-rho_l)*g
-密度对比: rho_p/rho_l = 2   压力方程 div((1/rho)grad p)=b，FFT 预条件 PCG（容差 1e-12，上限 200 次）
-开始模拟：32x32x32  N=2  dt=0.002  kT=0.25  W=15.8114  a=3.2  eta_c/eta_l=50  rho_p/rho_l=2  步数 0 -> 10
-step         0   R = (12.0000, 16.0000, 16.0000)   0.0 步/秒   cg=0.0/0   |Σb|=0.0e+00   残差=0.0e+00   真残差=0.0e+00
-step         5   R = (12.0000, 16.0000, 16.0000)   155.0 步/秒   cg=16.8/17   |Σb|=3.3e-12   残差=2.1e-13   真残差=2.1e-13
-完成

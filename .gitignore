@@ -28,3 +28,5 @@ vis/
 __pycache__/
 *.pyc
 
+# 测试记录
+baseline/
